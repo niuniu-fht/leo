@@ -8,6 +8,8 @@
 ![PRs](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 💬 交流群：[1101086346](https://qun.qq.com/qqun/1101086346)
 
+> 🛒 **作者自营小店**：[Leonardo 17000 分账号 Cookie 直购（¥7/个，自动发货）](https://pay.ldxp.cn/item/oce5fc) —— 买回来配合 Leo-Go 自动保活，导入即用，长期稳定在线。发货即 cookie，兑换后请尽快导入保活。
+
 ## ✨ 特性
 
 - ✅ **OpenAI 风格接口**：`POST /v1/video/generations` 一行接入，SDK/curl 直接替换 Base URL
@@ -39,6 +41,7 @@
 
 ## 目录
 
+- [📸 界面预览](#-界面预览)
 - [快速开始](#快速开始)
 - [公共 API](#公共-api)
 - [模型与能力](#模型与能力)
@@ -50,6 +53,24 @@
 - [配置](#配置)
 - [目录结构](#目录结构)
 - [免责声明](#免责声明)
+
+## 📸 界面预览
+
+**管理后台登录**
+
+![登录页](docs/screenshots/login.png)
+
+**Token 号池管理**（状态徽章 / 自动保活开关 / 积分 / 有效期 / 批量操作）
+
+![Token 管理](docs/screenshots/dashboard.png)
+
+**请求日志**（统计卡片 + 生成记录，失败状态码可点击查看详情）
+
+![请求日志](docs/screenshots/logs.png)
+
+**系统配置**（代理 / 重试 / 自动保活 / 存储）
+
+![系统配置](docs/screenshots/config.png)
 
 ## 快速开始
 
@@ -694,3 +715,5 @@ Leo-Go/
 ⭐ **点个 Star 就是最大的支持！**
 
 💬 遇到问题欢迎进交流群讨论：**1101086346**（[点击加群](https://qun.qq.com/qqun/1101086346)）
+
+🛒 需要账号？**作者自营小店**：[Leonardo 17000 分 Cookie ¥7 直购](https://pay.ldxp.cn/item/oce5fc)，自动发货，配合 Leo-Go 保活即用。
