@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"leo-go/internal/config"
-	"leo-go/internal/handler"
-	"leo-go/internal/provider/leonardo"
-	"leo-go/internal/reqlog"
-	"leo-go/internal/store"
-	"leo-go/internal/token"
+	"leo2api/internal/config"
+	"leo2api/internal/handler"
+	"leo2api/internal/provider/leonardo"
+	"leo2api/internal/reqlog"
+	"leo2api/internal/store"
+	"leo2api/internal/token"
 )
 
 func main() {
@@ -229,7 +229,7 @@ func main() {
 
 	addr := fmt.Sprintf("%s:%d", *host, *port)
 	log.Printf("╔══════════════════════════════════════════╗")
-	log.Printf("║       Leo-Go API Server v1.0.0           ║")
+	log.Printf("║       Leo2API API Server v1.0.0           ║")
 	log.Printf("╠══════════════════════════════════════════╣")
 	log.Printf("║  Listening: http://%s", addr)
 	log.Printf("║  Admin UI:  http://%s/", addr)

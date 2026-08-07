@@ -1,5 +1,5 @@
 services:
-  leo-go:
+  leo2api:
     build: .
     ports:
       - "8787:8787"

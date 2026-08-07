@@ -1,4 +1,4 @@
-# 🔥 Leo-Go — Leonardo 视频生成 API 网关（Token 池自动调度）
+# 🔥 Leo2API — Leonardo 视频生成 API 网关（Token 池自动调度）
 
 > 把一堆 Leonardo 账号 Cookie 变成 **OpenAI 风格的一行 API**：视频生成反代 + Token 池自动调度 + JWT 自动保活 + 额度管理。
 > 支持 Seedance 2.0 / Sora 2 / Kling O3 / MiniMax H3 等上游模型。
@@ -8,7 +8,7 @@
 ![PRs](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 💬 交流群：[1101086346](https://qun.qq.com/qqun/1101086346)
 
-> 🛒 **作者自营小店**：[Leonardo 17000 分账号 Cookie 直购（¥7/个，自动发货）](https://pay.ldxp.cn/item/oce5fc) —— 买回来配合 Leo-Go 自动保活，导入即用，长期稳定在线。发货即 cookie，兑换后请尽快导入保活。
+> 🛒 **作者自营小店**：[Leonardo 17000 分账号 Cookie 直购（¥7/个，自动发货）](https://pay.ldxp.cn/item/oce5fc) —— 买回来配合 Leo2API 自动保活，导入即用，长期稳定在线。发货即 cookie，兑换后请尽快导入保活。
 
 ## ✨ 特性
 
@@ -26,7 +26,7 @@
 
 ```
 ┌──────────────┐   OpenAI 风格 API    ┌─────────────────────────┐
-│   你的业务     │ ───────────────────▶ │         Leo-Go           │
+│   你的业务     │ ───────────────────▶ │         Leo2API           │
 │  SDK / curl  │ ◀─────────────────── │  Token 池调度 / 轮换      │
 └──────────────┘  /v1/video/...       │  JWT 自动保活刷新         │
                                      │  额度检测 / 失败重试        │
@@ -77,8 +77,8 @@
 ### 本地运行
 
 ```bash
-go build -o leo-go.exe ./cmd/server/
-./leo-go.exe
+go build -o leo2api.exe ./cmd/server/
+./leo2api.exe
 ```
 
 ### Docker 运行
@@ -682,7 +682,7 @@ config/config.json
 ## 目录结构
 
 ```text
-Leo-Go/
+Leo2API/
 ├── cmd/server/main.go
 ├── internal/
 │   ├── config/
@@ -716,4 +716,4 @@ Leo-Go/
 
 💬 遇到问题欢迎进交流群讨论：**1101086346**（[点击加群](https://qun.qq.com/qqun/1101086346)）
 
-🛒 需要账号？**作者自营小店**：[Leonardo 17000 分 Cookie ¥7 直购](https://pay.ldxp.cn/item/oce5fc)，自动发货，配合 Leo-Go 保活即用。
+🛒 需要账号？**作者自营小店**：[Leonardo 17000 分 Cookie ¥7 直购](https://pay.ldxp.cn/item/oce5fc)，自动发货，配合 Leo2API 保活即用。

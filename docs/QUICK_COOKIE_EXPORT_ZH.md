@@ -2,7 +2,7 @@
 
 ## 用途
 
-本流程用于在 Chrome 中登录 Leonardo 后，快速导出 Leo-Go 刷新所需的最小认证 Cookie。
+本流程用于在 Chrome 中登录 Leonardo 后，快速导出 Leo2API 刷新所需的最小认证 Cookie。
 
 插件默认只导出认证相关 Cookie，不导出 Google Analytics、Intercom 等统计和客服 Cookie。
 
@@ -30,9 +30,9 @@
 3. 点击浏览器工具栏中的“Leonardo Cookie Exporter”。
 4. 保持“包含全部 Leonardo Cookie”未勾选。
 5. 点击“导出标准 JSON”，保存导出的 `.json` 文件。
-6. 将该 JSON 文件导入 Leo-Go 的 Cookie 导入页面。
+6. 将该 JSON 文件导入 Leo2API 的 Cookie 导入页面。
 
-也可以点击“复制 Cookie 字符串”，直接粘贴到 Leo-Go 的 Cookie 导入框。
+也可以点击“复制 Cookie 字符串”，直接粘贴到 Leo2API 的 Cookie 导入框。
 
 ## 三、获取 Cookie 的核心代码
 
@@ -152,11 +152,11 @@ CF_Access_Token
 }
 ```
 
-## 五、导入 Leo-Go
+## 五、导入 Leo2API
 
 ### 管理后台导入
 
-在 Leo-Go 管理后台打开 Cookie 导入功能，将 `.json` 文件上传，或粘贴 Cookie 字符串，然后等待后台验证完成。
+在 Leo2API 管理后台打开 Cookie 导入功能，将 `.json` 文件上传，或粘贴 Cookie 字符串，然后等待后台验证完成。
 
 导入成功后，系统会：
 
@@ -210,7 +210,7 @@ X-Import-Key: <config.cookie_import_api_key>
 
 ### 过一段时间后刷新失败
 
-Leonardo 的 `accessToken` 通常只有约 1 小时有效期，但登录会话 Cookie 有更长有效期。Leo-Go 应在 JWT 到期前自动刷新，不需要重新导出 Cookie。
+Leonardo 的 `accessToken` 通常只有约 1 小时有效期，但登录会话 Cookie 有更长有效期。Leo2API 应在 JWT 到期前自动刷新，不需要重新导出 Cookie。
 
 如果仍然失败，查看刷新失败原因：
 
@@ -223,7 +223,7 @@ Leonardo 的 `accessToken` 通常只有约 1 小时有效期，但登录会话 C
 
 Cookie 等同于登录凭据。导出后请遵守：
 
-- 只传到自己的 Leo-Go 服务。
+- 只传到自己的 Leo2API 服务。
 - 不要发送到第三方 Cookie 检测网站。
 - 不要提交 Git、网盘公开链接或聊天群。
 - 文件使用完后及时删除或加密保存。

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"leo-go/internal/token"
+	"leo2api/internal/token"
 )
 
 // memoryTokenStore is a minimal in-memory TokenStore used by tests in this

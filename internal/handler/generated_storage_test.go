@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"leo-go/internal/config"
+	"leo2api/internal/config"
 )
 
 func TestGetGeneratedStorageStats(t *testing.T) {

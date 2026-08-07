@@ -101,7 +101,7 @@ func (s *Server) fetchGeneratedMediaPayload(sourceURL, generationID, mediaKind s
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "leo-go-generated-fetch/1.0")
+	req.Header.Set("User-Agent", "leo2api-generated-fetch/1.0")
 	req.Header.Set("Accept", "*/*")
 
 	resp, err := httpClient.Do(req)

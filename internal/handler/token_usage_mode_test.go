@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"leo-go/internal/config"
-	"leo-go/internal/token"
+	"leo2api/internal/config"
+	"leo2api/internal/token"
 )
 
 func TestTokenMaxRunningTasksDefaultsToTwo(t *testing.T) {

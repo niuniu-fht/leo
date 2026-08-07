@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"leo-go/internal/token"
+	"leo2api/internal/token"
 )
 
 type temporaryUnavailableStore struct {

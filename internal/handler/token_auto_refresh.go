@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"leo-go/internal/token"
+	"leo2api/internal/token"
 )
 
 const autoRefreshRetryCooldown = time.Minute

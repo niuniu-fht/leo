@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"leo-go/internal/store"
+	"leo2api/internal/store"
 )
 
 const StatusTemporaryUnavailable = "temporary_unavailable"

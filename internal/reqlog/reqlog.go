@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"leo-go/internal/store"
+	"leo2api/internal/store"
 )
 
 // Entry represents a single generation request log.

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"leo-go/internal/config"
+	"leo2api/internal/config"
 )
 
 func TestMaterializeGeneratedMediaUpstreamModeSkipsLocalFetch(t *testing.T) {

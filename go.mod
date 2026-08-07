@@ -1,4 +1,4 @@
-module leo-go
+module leo2api
 
 go 1.23.0
 

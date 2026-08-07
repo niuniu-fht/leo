@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Leonardo Cookie Exporter",
   "version": "1.0.0",
-  "description": "导出 Leonardo 标准 Cookie JSON，便于导入 Leo-Go。",
+  "description": "导出 Leonardo 标准 Cookie JSON，便于导入 Leo2API。",
   "permissions": [
     "cookies",
     "downloads",

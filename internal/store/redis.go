@@ -18,7 +18,7 @@ import (
 
 const (
 	defaultRedisAddress = "127.0.0.1:6379"
-	defaultRedisPrefix  = "leo-go"
+	defaultRedisPrefix  = "leo2api"
 	tokensRedisKey      = "tokens"
 )
 

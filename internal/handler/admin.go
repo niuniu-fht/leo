@@ -19,9 +19,9 @@ import (
 	"strings"
 	"time"
 
-	"leo-go/internal/provider/leonardo"
-	"leo-go/internal/reqlog"
-	"leo-go/internal/token"
+	"leo2api/internal/provider/leonardo"
+	"leo2api/internal/reqlog"
+	"leo2api/internal/token"
 )
 
 // HandleAuthLogin handles POST /api/v1/auth/login.
@@ -42,7 +42,7 @@ func (s *Server) HandleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     "admin_session",
-		Value:    s.Config.GetString("admin_session_secret", "leo-go-session"),
+		Value:    s.Config.GetString("admin_session_secret", "leo2api-session"),
 		Path:     "/",
 		MaxAge:   86400,
 		HttpOnly: true,
@@ -64,7 +64,7 @@ func (s *Server) HandleAuthMe(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) requireAdmin(r *http.Request) error {
 	cookie, err := r.Cookie("admin_session")
-	if err != nil || cookie.Value != s.Config.GetString("admin_session_secret", "leo-go-session") {
+	if err != nil || cookie.Value != s.Config.GetString("admin_session_secret", "leo2api-session") {
 		return fmt.Errorf("unauthorized")
 	}
 	return nil
@@ -3087,7 +3087,7 @@ func (s *Server) downloadRemoteImage(remoteURL string) ([]byte, string, string, 
 		if err != nil {
 			return nil, "", "", err
 		}
-		req.Header.Set("User-Agent", "leo-go-image-fetch/1.0")
+		req.Header.Set("User-Agent", "leo2api-image-fetch/1.0")
 		req.Header.Set("Accept", "image/*,*/*;q=0.8")
 		req.Close = true
 
@@ -3174,7 +3174,7 @@ func (s *Server) downloadRemoteVideo(remoteURL string) ([]byte, string, string, 
 		if err != nil {
 			return nil, "", "", 0, err
 		}
-		req.Header.Set("User-Agent", "leo-go-video-fetch/1.0")
+		req.Header.Set("User-Agent", "leo2api-video-fetch/1.0")
 		req.Header.Set("Accept", "video/*,*/*;q=0.8")
 		req.Close = true
 
@@ -3262,7 +3262,7 @@ func (s *Server) downloadRemoteAudio(remoteURL string) ([]byte, string, string, 
 		if err != nil {
 			return nil, "", "", "", err
 		}
-		req.Header.Set("User-Agent", "leo-go-audio-fetch/1.0")
+		req.Header.Set("User-Agent", "leo2api-audio-fetch/1.0")
 		req.Header.Set("Accept", "audio/*,*/*;q=0.8")
 		req.Close = true
 
@@ -4290,7 +4290,7 @@ func doHTTPProxyProbe(proxyStr, targetURL string) (int, string, error) {
 	if err != nil {
 		return 0, "", err
 	}
-	req.Header.Set("User-Agent", "leo-go-proxy-test/1.0")
+	req.Header.Set("User-Agent", "leo2api-proxy-test/1.0")
 
 	resp, err := client.Do(req)
 	if err != nil {

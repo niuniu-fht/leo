@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"leo-go/internal/reqlog"
-	"leo-go/internal/token"
+	"leo2api/internal/reqlog"
+	"leo2api/internal/token"
 )
 
 func TestCleanupTokensByStatusDeletesOnlyExhaustedTokens(t *testing.T) {

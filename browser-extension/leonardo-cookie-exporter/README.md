@@ -1,12 +1,12 @@
 # Leonardo Cookie Exporter
 
-这是一个给 Chrome / Edge 用的小扩展，用来快速导出 Leonardo 标准 Cookie JSON，便于直接导入 Leo-Go 后台。
+这是一个给 Chrome / Edge 用的小扩展，用来快速导出 Leonardo 标准 Cookie JSON，便于直接导入 Leo2API 后台。
 
 ## 功能
 
 - 一键导出标准 JSON 文件
 - 一键复制 Leonardo Cookie 字符串
-- 默认兼容 Leo-Go 的“导入 Cookie”格式
+- 默认兼容 Leo2API 的“导入 Cookie”格式
 
 导出的 JSON 结构如下：
 
@@ -34,7 +34,7 @@ browser-extension/leonardo-cookie-exporter
 1. 先在浏览器里登录 `https://app.leonardo.ai`
 2. 打开扩展
 3. 点击“导出标准 JSON”
-4. 把导出的 `.json` 文件拿到 Leo-Go 后台“导入 Cookie”使用
+4. 把导出的 `.json` 文件拿到 Leo2API 后台“导入 Cookie”使用
 
 ## 说明
 

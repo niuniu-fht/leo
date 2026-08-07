@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"leo-go/internal/config"
-	"leo-go/internal/provider/leonardo"
-	"leo-go/internal/reqlog"
-	"leo-go/internal/token"
+	"leo2api/internal/config"
+	"leo2api/internal/provider/leonardo"
+	"leo2api/internal/reqlog"
+	"leo2api/internal/token"
 )
 
 var openAIModelCatalog = []map[string]interface{}{
