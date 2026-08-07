@@ -1,0 +1,257 @@
+package token
+
+import (
+	"fmt"
+	"testing"
+)
+
+type memoryTokenStore struct {
+	rows  []map[string]interface{}
+	saves int
+}
+
+func (s *memoryTokenStore) LoadTokens() ([]map[string]interface{}, error) {
+	return append([]map[string]interface{}(nil), s.rows...), nil
+}
+
+func (s *memoryTokenStore) ReplaceTokens(tokens []map[string]interface{}) error {
+	s.rows = append([]map[string]interface{}(nil), tokens...)
+	s.saves++
+	return nil
+}
+
+func TestRemoveManyRemovesTokensWithMissingCount(t *testing.T) {
+	t.Parallel()
+
+	m := NewManager(&memoryTokenStore{})
+	if _, _, err := m.Add("token-a", "leonardo", "session_token", "", "", ""); err != nil {
+		t.Fatalf("add token a: %v", err)
+	}
+	if _, _, err := m.Add("token-b", "leonardo", "session_token", "", "", ""); err != nil {
+		t.Fatalf("add token b: %v", err)
+	}
+	if _, _, err := m.Add("token-c", "leonardo", "session_token", "", "", ""); err != nil {
+		t.Fatalf("add token c: %v", err)
+	}
+
+	deletedIDs, missing := m.RemoveMany([]string{
+		GenerateTokenID("token-a"),
+		"missing-token",
+		GenerateTokenID("token-c"),
+		GenerateTokenID("token-a"),
+		"",
+	})
+	if missing != 1 {
+		t.Fatalf("expected 1 missing token, got %d", missing)
+	}
+	if len(deletedIDs) != 2 {
+		t.Fatalf("expected 2 deleted tokens, got %d (%v)", len(deletedIDs), deletedIDs)
+	}
+
+	remaining := m.ListFull()
+	if len(remaining) != 1 {
+		t.Fatalf("expected 1 remaining token, got %d", len(remaining))
+	}
+	if got := remaining[0]["id"]; got != GenerateTokenID("token-b") {
+		t.Fatalf("expected token-b to remain, got %v", got)
+	}
+}
+
+func TestUpsertImportedCookiesSavesOnceAndMarksPending(t *testing.T) {
+	t.Parallel()
+
+	store := &memoryTokenStore{}
+	m := NewManager(store)
+
+	results := m.UpsertImportedCookies([]ImportedCookieInput{
+		{Value: "cookie-a", AccountName: "A", Source: "api_cookie_import", AutoRefresh: true, Status: "pending"},
+		{Value: "cookie-b", AccountName: "B", Source: "api_cookie_import", AutoRefresh: true, Status: "pending"},
+	})
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	if store.saves != 1 {
+		t.Fatalf("expected one save for batch import, got %d", store.saves)
+	}
+	for _, result := range results {
+		if result.Err != nil {
+			t.Fatalf("unexpected import error: %v", result.Err)
+		}
+		if got := result.Info["status"]; got != "pending" {
+			t.Fatalf("expected pending status, got %v", got)
+		}
+	}
+}
+
+func TestUpsertImportedCookiesKeepsActiveDuplicateActive(t *testing.T) {
+	t.Parallel()
+
+	m := NewManager(&memoryTokenStore{})
+	if _, _, _, err := m.UpsertImportedCookie("cookie-a", "A", "", "", "api_cookie_import", true); err != nil {
+		t.Fatalf("upsert active cookie: %v", err)
+	}
+
+	results := m.UpsertImportedCookies([]ImportedCookieInput{
+		{Value: "cookie-a", AccountName: "A", Source: "api_cookie_import", AutoRefresh: true, Status: "pending"},
+	})
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if !results[0].Duplicate {
+		t.Fatalf("expected duplicate result")
+	}
+	if got := results[0].Info["status"]; got != "active" {
+		t.Fatalf("expected active duplicate to remain active, got %v", got)
+	}
+}
+
+func TestRoundRobinCandidatesAdvanceOnlyAfterCommit(t *testing.T) {
+	t.Parallel()
+
+	m := NewManager(&memoryTokenStore{})
+	for _, value := range []string{"token-a", "token-b", "token-c"} {
+		if _, _, err := m.Add(value, "leonardo", "session_token", "", "", ""); err != nil {
+			t.Fatalf("add %s: %v", value, err)
+		}
+	}
+
+	candidates := m.AvailableTokensForPlatform("leonardo", "round_robin")
+	if got := candidates[0]["id"]; got != GenerateTokenID("token-a") {
+		t.Fatalf("first candidate = %v, want token-a", got)
+	}
+
+	// Simulate token-a being skipped by the scheduler and token-b being used.
+	m.CommitAvailableTokenForPlatform("leonardo", GenerateTokenID("token-b"), "round_robin")
+	candidates = m.AvailableTokensForPlatform("leonardo", "round_robin")
+	if got := candidates[0]["id"]; got != GenerateTokenID("token-c") {
+		t.Fatalf("first candidate after committing token-b = %v, want token-c", got)
+	}
+
+	// Merely reading/skipping candidates must not move the cursor.
+	candidates = m.AvailableTokensForPlatform("leonardo", "round_robin")
+	if got := candidates[0]["id"]; got != GenerateTokenID("token-c") {
+		t.Fatalf("first candidate moved without commit: %v", got)
+	}
+
+	if err := m.SetStatus(GenerateTokenID("token-c"), "disabled"); err != nil {
+		t.Fatalf("disable token-c: %v", err)
+	}
+	candidates = m.AvailableTokensForPlatform("leonardo", "round_robin")
+	if got := candidates[0]["id"]; got != GenerateTokenID("token-a") {
+		t.Fatalf("first candidate with token-c disabled = %v, want token-a", got)
+	}
+
+	if err := m.SetStatus(GenerateTokenID("token-c"), "active"); err != nil {
+		t.Fatalf("enable token-c: %v", err)
+	}
+	candidates = m.AvailableTokensForPlatform("leonardo", "round_robin")
+	if got := candidates[0]["id"]; got != GenerateTokenID("token-c") {
+		t.Fatalf("first candidate after token-c recovery = %v, want token-c", got)
+	}
+}
+
+func TestRoundRobinFromStartCandidatesDoNotAdvance(t *testing.T) {
+	t.Parallel()
+
+	m := NewManager(&memoryTokenStore{})
+	for _, value := range []string{"token-a", "token-b", "token-c"} {
+		if _, _, err := m.Add(value, "leonardo", "session_token", "", "", ""); err != nil {
+			t.Fatalf("add %s: %v", value, err)
+		}
+	}
+
+	candidates := m.AvailableTokensForPlatform("leonardo", "round_robin_from_start")
+	if got := candidates[0]["id"]; got != GenerateTokenID("token-a") {
+		t.Fatalf("first candidate = %v, want token-a", got)
+	}
+
+	m.CommitAvailableTokenForPlatform("leonardo", GenerateTokenID("token-b"), "round_robin_from_start")
+	candidates = m.AvailableTokensForPlatform("leonardo", "round_robin_from_start")
+	if got := candidates[0]["id"]; got != GenerateTokenID("token-a") {
+		t.Fatalf("first candidate after commit = %v, want token-a", got)
+	}
+
+	if err := m.SetStatus(GenerateTokenID("token-a"), "disabled"); err != nil {
+		t.Fatalf("disable token-a: %v", err)
+	}
+	candidates = m.AvailableTokensForPlatform("leonardo", "round_robin_from_start")
+	if got := candidates[0]["id"]; got != GenerateTokenID("token-b") {
+		t.Fatalf("first candidate with token-a disabled = %v, want token-b", got)
+	}
+}
+
+func TestRefreshFailureExcludesTokenFromCandidatesUntilRecovered(t *testing.T) {
+	t.Parallel()
+
+	m := NewManager(&memoryTokenStore{})
+	for _, value := range []string{"token-a", "token-b"} {
+		if _, _, err := m.Add(value, "leonardo", "session_token", "", "", ""); err != nil {
+			t.Fatalf("add %s: %v", value, err)
+		}
+	}
+
+	m.ReportRefreshFailure(GenerateTokenID("token-a"), "no JWT found")
+	candidates := m.AvailableTokensForPlatform("leonardo", "round_robin_from_start")
+	if got := candidates[0]["id"]; got != GenerateTokenID("token-b") {
+		t.Fatalf("first candidate with token-a refresh failed = %v, want token-b", got)
+	}
+	m.ReportRefreshFailure(GenerateTokenID("token-a"), "no JWT found")
+	candidates = m.AvailableTokensForPlatform("leonardo", "round_robin_from_start")
+	if got := candidates[0]["id"]; got != GenerateTokenID("token-b") {
+		t.Fatalf("first candidate with token-a confirmed failed = %v, want token-b", got)
+	}
+
+	if err := m.SetStatus(GenerateTokenID("token-a"), "active"); err != nil {
+		t.Fatalf("restore token-a: %v", err)
+	}
+	candidates = m.AvailableTokensForPlatform("leonardo", "round_robin_from_start")
+	if got := candidates[0]["id"]; got != GenerateTokenID("token-a") {
+		t.Fatalf("first candidate after token-a recovery = %v, want token-a", got)
+	}
+}
+
+func TestReportModelSuccessCountsSeedanceMiniAsFastSlot(t *testing.T) {
+	t.Parallel()
+
+	m := NewManager(&memoryTokenStore{})
+	id, _, err := m.Add("token-mini", "leonardo", "session_token", "", "", "")
+	if err != nil {
+		t.Fatalf("add token: %v", err)
+	}
+	tokenID := fmt.Sprintf("%v", id["id"])
+
+	info := m.ReportModelSuccessWithAutoDisable(tokenID, "seedance-2.0-mini", false)
+	if info == nil {
+		t.Fatal("expected token info")
+	}
+	if got := info["seedance_fast_success_count"]; got != float64(1) {
+		t.Fatalf("seedance_fast_success_count = %v, want 1", got)
+	}
+	if got := info["seedance_standard_success_count"]; got != nil && got != float64(0) {
+		t.Fatalf("seedance_standard_success_count = %v, want 0", got)
+	}
+}
+
+func TestReportModelSuccessCountsSeedance480pSlots(t *testing.T) {
+	t.Parallel()
+
+	m := NewManager(&memoryTokenStore{})
+	id, _, err := m.Add("token-480p", "leonardo", "session_token", "", "", "")
+	if err != nil {
+		t.Fatalf("add token: %v", err)
+	}
+	tokenID := fmt.Sprintf("%v", id["id"])
+
+	info := m.ReportModelSuccessWithAutoDisable(tokenID, "seedance-2.0-480p", false)
+	if info == nil {
+		t.Fatal("expected token info")
+	}
+	if got := info["seedance_standard_success_count"]; got != float64(1) {
+		t.Fatalf("seedance_standard_success_count = %v, want 1", got)
+	}
+
+	info = m.ReportModelSuccessWithAutoDisable(tokenID, "seedance-2.0-mini-480p", false)
+	if got := info["seedance_fast_success_count"]; got != float64(1) {
+		t.Fatalf("seedance_fast_success_count = %v, want 1", got)
+	}
+}

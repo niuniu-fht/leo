@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="zh-CN" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Leo-Go 控制台</title>
+  <link rel="stylesheet" href="/static/vendor/tabler/tabler.min.css" />
+  <link rel="stylesheet" href="/static/admin.css?v=20260807-1" />
+</head>
+<body class="d-flex flex-column min-vh-100">
+  <header class="navbar navbar-expand-md navbar-dark d-print-none leo-navbar">
+    <div class="container-xl">
+      <div class="navbar-brand d-flex align-items-center gap-2">
+        <span class="leo-brand-mark">🚀</span>
+        <span class="fw-bold">Leo-Go</span>
+        <span class="leo-brand-sub d-none d-md-inline">Leonardo 视频生成网关</span>
+      </div>
+      <ul class="navbar-nav ms-auto align-items-center">
+        <li class="nav-item">
+          <a class="nav-link leo-nav-link" href="https://github.com/LImingcheng07/leo-go" target="_blank" rel="noopener">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-1"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path></svg>
+            GitHub
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link leo-nav-link" href="https://qun.qq.com/qqun/1101086346" target="_blank" rel="noopener">💬 交流群 1101086346</a>
+        </li>
+      </ul>
+    </div>
+  </header>
+
+  <div class="page-wrapper flex-fill d-flex flex-column">
+    <div class="container-xl py-4 flex-fill">
+      <ul class="nav nav-pills leo-tabs mb-3" role="tablist" aria-label="控制台导航">
+        <li class="nav-item" role="presentation">
+          <button class="nav-link tab-btn active" data-target="tokens" type="button" role="tab">Token 管理</button>
+        </li>
+        <li class="nav-item" role="presentation">
+          <button class="nav-link tab-btn" data-target="config" type="button" role="tab">系统配置</button>
+        </li>
+        <li class="nav-item" role="presentation">
+          <button class="nav-link tab-btn" data-target="logs" type="button" role="tab">请求日志</button>
+        </li>
+      </ul>
+
+      <!-- Tokens Tab -->
+      <div id="tokens" class="tab-pane active">
+        <div class="row g-3 mb-3">
+          <div class="col-12">
+            <div class="card">
+              <div class="card-header">
+                <h3 class="card-title mb-0">快捷操作</h3>
+              </div>
+              <div class="card-body">
+                <div class="d-flex flex-wrap gap-2">
+                  <button id="openAddTokenModalBtn" class="btn btn-primary">添加 Token</button>
+                  <button id="openCookieImportBtn" class="btn btn-outline-secondary">导入 Cookie</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header d-flex flex-wrap align-items-center gap-2">
+            <h3 class="card-title mb-0 me-auto">Token 账号池</h3>
+            <div class="d-flex flex-wrap gap-2">
+              <button id="exportTokensBtn" class="btn btn-sm btn-outline-secondary">导出 Token</button>
+              <button id="deleteTokensBatchBtn" class="btn btn-sm btn-outline-danger">批量删除</button>
+              <button id="enableTokensBatchBtn" class="btn btn-sm btn-outline-secondary">批量启用</button>
+              <button id="disableTokensBatchBtn" class="btn btn-sm btn-outline-secondary">批量禁用</button>
+              <button id="enableAutoRefreshBatchBtn" class="btn btn-sm btn-outline-secondary">开启自动刷新</button>
+              <button id="disableAutoRefreshBatchBtn" class="btn btn-sm btn-outline-secondary">关闭自动刷新</button>
+              <button id="refreshTokensBatchBtn" class="btn btn-sm btn-outline-secondary">刷新 Token</button>
+              <button id="cleanupInvalidTokensBtn" class="btn btn-sm btn-outline-danger">一键清理异常</button>
+              <button id="cleanupExhaustedTokensBtn" class="btn btn-sm btn-outline-danger">一键清理额度耗尽</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div id="tokenSummary" class="token-summary d-flex flex-wrap gap-3 text-secondary mb-3">
+              <span>Token 总数：<strong id="tokenTotalCount" class="text-body">0</strong></span>
+              <span>当前生效：<strong id="tokenActiveCount" class="text-body">0</strong></span>
+              <span>筛选结果：<strong id="tokenFilteredCount" class="text-body">0</strong></span>
+              <span>已选择：<strong id="tokenSelectedCount" class="text-body">0</strong></span>
+            </div>
+            <div class="token-filters d-flex flex-wrap align-items-end gap-2 mb-3">
+              <div>
+                <label class="form-label mb-1 small" for="tokenStatusFilter">状态</label>
+                <select id="tokenStatusFilter" class="form-select form-select-sm input-select">
+                  <option value="">全部状态</option>
+                  <option value="active">生效中</option>
+                  <option value="temporary_unavailable">临时不可用</option>
+                  <option value="disabled">已禁用</option>
+                  <option value="exhausted">额度耗尽</option>
+                  <option value="invalid">已失效</option>
+                  <option value="error">请求异常</option>
+                </select>
+              </div>
+              <div>
+                <label class="form-label mb-1 small" for="tokenCreditsFilter">积分</label>
+                <select id="tokenCreditsFilter" class="form-select form-select-sm input-select">
+                  <option value="">全部积分</option>
+                  <option value="error">积分刷新异常</option>
+                </select>
+              </div>
+              <button id="clearTokenFiltersBtn" class="btn btn-sm btn-outline-secondary" type="button">清空筛选</button>
+              <button id="selectAllFilteredTokensBtn" class="btn btn-sm btn-outline-secondary" type="button">全选当前列表</button>
+              <button id="clearTokenSelectionBtn" class="btn btn-sm btn-outline-secondary" type="button">取消选择</button>
+            </div>
+
+            <div id="tokenPagination" class="logs-pagination token-pagination d-flex flex-wrap align-items-center gap-2 mb-2" style="display:none;">
+              <div class="d-flex align-items-center gap-2">
+                <span class="text-secondary small">每页</span>
+                <select id="tokenPageSizeSelect" class="form-select form-select-sm input-select" style="width:auto;" aria-label="每页显示数量">
+                  <option value="20">20 / 页</option>
+                  <option value="50" selected>50 / 页</option>
+                  <option value="100">100 / 页</option>
+                  <option value="200">200 / 页</option>
+                  <option value="500">500 / 页</option>
+                  <option value="1000">1000 / 页</option>
+                  <option value="2000">2000 / 页</option>
+                </select>
+              </div>
+              <button id="tokenPrevBtn" class="btn btn-sm btn-outline-secondary" type="button">上一页</button>
+              <span id="tokenPageInfo" class="help text-secondary small">第 1 / 1 页</span>
+              <div class="d-flex align-items-center gap-2">
+                <span class="text-secondary small">跳到</span>
+                <input id="tokenJumpInput" class="form-control form-control-sm input-select" type="number" min="1" value="1" style="width:80px;" />
+                <span class="text-secondary small">页</span>
+              </div>
+              <button id="tokenJumpBtn" class="btn btn-sm btn-outline-secondary" type="button">跳转</button>
+              <button id="tokenNextBtn" class="btn btn-sm btn-outline-secondary" type="button">下一页</button>
+            </div>
+
+            <div class="table-responsive table-wrapper">
+              <table id="tokenTable" class="table table-vcenter card-table">
+                <thead>
+                  <tr>
+                    <th class="w-1"><input id="tokenSelectAll" type="checkbox" class="form-check-input" title="全选/取消全选" /></th>
+                    <th>账号</th>
+                    <th>Token (脱敏展示)</th>
+                    <th>状态</th>
+                    <th>自动刷新</th>
+                    <th>积分</th>
+                    <th>成功次数</th>
+                    <th>有效期</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td colspan="9" class="empty-state text-secondary text-center py-4">加载中...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Config Tab -->
+      <div id="config" class="tab-pane">
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title mb-0">系统配置</h3>
+          </div>
+          <div class="card-body">
+            <div class="config-form">
+              <ul class="nav nav-pills leo-config-tabs mb-3" role="tablist" aria-label="配置分类">
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link config-cat-btn active" type="button" data-target="cfg-account">账户与安全</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link config-cat-btn" type="button" data-target="cfg-network">代理与网络</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link config-cat-btn" type="button" data-target="cfg-retry">重试与容错</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link config-cat-btn" type="button" data-target="cfg-storage">刷新与存储</button>
+                </li>
+              </ul>
+
+              <section id="cfg-account" class="config-cat-pane active">
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confApiKey">服务 API Key</label>
+                  <input type="text" id="confApiKey" class="form-control input-text" placeholder="留空表示不鉴权，例如：my-secret-key" />
+                  <p class="help text-secondary small mt-1">用于访问本服务接口（如 /v1/video/generations）。支持 Bearer 或 X-API-Key。</p>
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confCookieImportApiKey">Token 池导入密钥</label>
+                  <input type="password" id="confCookieImportApiKey" class="form-control input-text" placeholder="自动化程序导入 Cookie 时使用" />
+                  <p class="help text-secondary small mt-1">自动化程序调用 /api/v1/tokens/import-cookie 时使用，支持 Bearer 或 X-Import-Key。</p>
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confAdminUsername">管理员账号</label>
+                  <input type="text" id="confAdminUsername" class="form-control input-text" placeholder="默认 admin" />
+                  <p class="help text-secondary small mt-1">管理后台登录账号。</p>
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confAdminPassword">管理员密码</label>
+                  <input type="password" id="confAdminPassword" class="form-control input-text" placeholder="默认 admin" />
+                  <p class="help text-secondary small mt-1">管理后台登录密码。</p>
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confPublicBaseUrl">公共 URL (Public Base URL)</label>
+                  <input type="text" id="confPublicBaseUrl" class="form-control input-text" placeholder="例如：http://127.0.0.1:8787/ 或 https://your-domain/" />
+                  <p class="help text-secondary small mt-1">用于生成图片/视频预览的绝对链接。建议填写外部可访问地址。</p>
+                </div>
+              </section>
+
+              <section id="cfg-network" class="config-cat-pane">
+                <div class="form-group mb-3">
+                  <label class="form-check checkbox-label" style="user-select: none;">
+                    <input type="checkbox" id="confUseProxy" class="form-check-input" />
+                    <span class="form-check-label">启用基础代理</span>
+                  </label>
+                  <p class="help text-secondary small mt-1">基础代理用于发送生成、轮询、刷新 Token 这类“办理业务”的请求。</p>
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confProxy">基础代理地址 (Proxy URL)</label>
+                  <input type="text" id="confProxy" class="form-control input-text" placeholder="例如：http://127.0.0.1:7890" />
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-check checkbox-label" style="user-select: none;">
+                    <input type="checkbox" id="confResourceUseProxy" class="form-check-input" />
+                    <span class="form-check-label">启用资源代理</span>
+                  </label>
+                  <p class="help text-secondary small mt-1">资源代理用于下载远程图片、视频这类“搬运业务”的请求；未开启时，这些资源请求会直连，不再回退使用基础代理。</p>
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confResourceProxy">资源代理地址 (Proxy URL)</label>
+                  <input type="text" id="confResourceProxy" class="form-control input-text" placeholder="例如：http://127.0.0.1:7890" />
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confLeonardoUploadProxyMode">Leonardo 上传代理策略</label>
+                  <select id="confLeonardoUploadProxyMode" class="form-select input-text">
+                    <option value="basic">跟随基础代理</option>
+                    <option value="direct">强制直连</option>
+                    <option value="custom">单独上传代理</option>
+                  </select>
+                  <p class="help text-secondary small mt-1">只影响上传图片/视频到 Leonardo 临时 S3 的链路，不影响生成、轮询、刷新 Token 这些基础业务请求。</p>
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confLeonardoUploadProxy">Leonardo 上传代理地址 (Proxy URL)</label>
+                  <input type="text" id="confLeonardoUploadProxy" class="form-control input-text" placeholder="例如：http://127.0.0.1:7890" />
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confGenerateTimeout">生成超时 (秒)</label>
+                  <input type="number" id="confGenerateTimeout" class="form-control input-text" step="1" placeholder="默认 300" />
+                  <p class="help text-secondary small mt-1">默认 300 秒。支持任意正整数，按你的业务场景设置。</p>
+                </div>
+
+                <div class="form-group mb-3">
+                  <button id="testProxyBtn" type="button" class="btn btn-outline-secondary">检测代理与业务权限</button>
+                  <p class="help text-secondary small mt-1">会先检测基础代理和资源代理的网络连通性，再用当前有效 token 检测基础代理是否真的能访问积分接口。</p>
+                  <pre id="proxyTestResult" class="help text-secondary small mt-2 p-2 leo-pre" style="white-space: pre-wrap;">点击上方按钮后，会在这里显示连通性检测和业务权限检测结果。</pre>
+                </div>
+              </section>
+
+              <section id="cfg-retry" class="config-cat-pane">
+                <div class="form-group mb-3">
+                  <label class="form-check checkbox-label" style="user-select: none;">
+                    <input type="checkbox" id="confRetryEnabled" class="form-check-input" />
+                    <span class="form-check-label">启用自动重试</span>
+                  </label>
+                  <p class="help text-secondary small mt-1">首次提交阶段错误切换到下一个 Token；指定的异步任务错误复用原 Token 和已上传素材重试。原 Token 重新提交遇到临时网络错误时也会继续使用剩余次数。</p>
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confRetryMaxAttempts">最大尝试次数 (含首次)</label>
+                  <input type="number" id="confRetryMaxAttempts" class="form-control input-text" min="1" max="10" step="1" placeholder="默认 3" />
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confRetryBackoffSeconds">重试退避基数 (秒)</label>
+                  <input type="number" id="confRetryBackoffSeconds" class="form-control input-text" min="0" max="30" step="0.1" placeholder="默认 1.0" />
+                  <p class="help text-secondary small mt-1">第 n 次重试等待时间 = 基数 * 2^(n-1)。</p>
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confRetryOnStatusCodes">可重试状态码</label>
+                  <input type="text" id="confRetryOnStatusCodes" class="form-control input-text" placeholder="例如：429,451,500,502,503,504" />
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confRetryOnErrorTypes">可重试错误类型</label>
+                  <input type="text" id="confRetryOnErrorTypes" class="form-control input-text" placeholder="例如：timeout,connection,proxy" />
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confRetrySameTokenErrorTypes">异步任务原 Token 重试错误类型</label>
+                  <input type="text" id="confRetrySameTokenErrorTypes" class="form-control input-text" placeholder="例如：provider_moderation_error" />
+                  <p class="help text-secondary small mt-1">这些错误在任务已提交、轮询后失败时，复用原 Token 和已上传素材重新生成；其他提交阶段错误仍按原逻辑切换 Token。</p>
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confTokenRotationStrategy">Token 轮换策略</label>
+                  <select id="confTokenRotationStrategy" class="form-select input-select">
+                    <option value="round_robin">round_robin（接着上次位置）</option>
+                    <option value="round_robin_from_start">round_robin_from_start（每次从头开始）</option>
+                    <option value="random">random（随机轮换）</option>
+                  </select>
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-check checkbox-label" style="user-select: none;">
+                    <input type="checkbox" id="confTokenSuccessAutoDisableEnabled" class="form-check-input" />
+                    <span class="form-check-label">启用 Token 组合耗尽自动禁用</span>
+                  </label>
+                  <p class="help text-secondary small mt-1">开启后，一个 token 只要成功完成任意 2 次 video-2.0 / video-2.0-fast 生成，就会自动标记为额度耗尽、禁用并关闭自动刷新。</p>
+                </div>
+
+                <div class="form-group mb-3" style="display:none;">
+                  <label class="form-label" for="confTokenSuccessAutoDisableThreshold">Token 自动禁用成功次数</label>
+                  <input type="number" id="confTokenSuccessAutoDisableThreshold" class="form-control input-text" min="1" max="100000" step="1" placeholder="默认 2" />
+                  <p class="help text-secondary small mt-1">兼容旧配置，当前固定组合耗尽规则不再使用此数值。</p>
+                </div>
+              </section>
+
+              <section id="cfg-storage" class="config-cat-pane">
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confRefreshIntervalMinutes">自动刷新间隔 (分钟)</label>
+                  <input type="number" id="confRefreshIntervalMinutes" class="form-control input-text" min="1" max="1440" step="1" placeholder="默认 15" />
+                  <p class="help text-secondary small mt-1">范围 1-1440 分钟。后台会按设置的分钟间隔自动刷新 token。</p>
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confTokenMaxRunningTasks">单 Token 最大并发任务数</label>
+                  <input type="number" id="confTokenMaxRunningTasks" class="form-control input-text" min="1" max="10" step="1" placeholder="默认 2" />
+                  <p class="help text-secondary small mt-1">控制每个 token 同时运行中的生成任务数量，范围 1-10。积分不足当前模型所需积分时会自动跳过该 token；低于 1200 积分才标记为额度耗尽。</p>
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-check checkbox-label" style="user-select: none;">
+                    <input type="checkbox" id="confExhaustedTokenAutoCleanupEnabled" class="form-check-input" />
+                    <span class="form-check-label">启用额度耗尽 Token 自动清理</span>
+                  </label>
+                  <p class="help text-secondary small mt-1">开启后，后台会按设定间隔自动删除状态为“额度耗尽”的 Token。</p>
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confExhaustedTokenAutoCleanupIntervalHours">额度耗尽 Token 自动清理间隔 (小时)</label>
+                  <input type="number" id="confExhaustedTokenAutoCleanupIntervalHours" class="form-control input-text" min="1" max="8760" step="1" placeholder="默认 24" />
+                  <p class="help text-secondary small mt-1">范围 1-8760 小时。填写 1 表示每 1 小时自动清理一次。</p>
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confBatchConcurrency">批量导入并发数</label>
+                  <input type="number" id="confBatchConcurrency" class="form-control input-text" min="1" max="100" step="1" placeholder="默认 5" />
+                  <p class="help text-secondary small mt-1">用于批量导入 Cookie 时的自动刷新与账号信息查询。默认并行 5 个。</p>
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confJwtRefreshMarginMinutes">JWT 提前刷新阈值 (分钟)</label>
+                  <input type="number" id="confJwtRefreshMarginMinutes" class="form-control input-text" min="0" max="60" step="1" placeholder="默认 5" />
+                  <p class="help text-secondary small mt-1">默认 5。剩余时间小于等于该值时，刷新 Token / 自动刷新会主动换新 JWT。填 0 表示手动刷新或自动刷新时总是强制换新；常规生成请求仍只会在 JWT 过期或缺失时换新。</p>
+                </div>
+
+                <div class="config-inline-row d-flex flex-wrap gap-3 mb-3">
+                  <div class="form-group inline-item flex-grow-1" style="min-width:200px;">
+                    <label class="form-label" for="confGeneratedMaxSizeMb">生成文件空间上限 (MB)</label>
+                    <input type="number" id="confGeneratedMaxSizeMb" class="form-control input-text" min="100" max="102400" step="1" placeholder="默认 1024" />
+                  </div>
+                  <div class="form-group inline-item flex-grow-1" style="min-width:200px;">
+                    <label class="form-label" for="confGeneratedPruneSizeMb">触发后清理量 (MB)</label>
+                    <input type="number" id="confGeneratedPruneSizeMb" class="form-control input-text" min="10" max="10240" step="1" placeholder="默认 200" />
+                  </div>
+                </div>
+                <p id="generatedUsageInfo" class="help text-secondary small">当前占用：- MB（- 个文件）</p>
+                <p class="help text-secondary small">超过上限后按最旧文件优先清理；最新生成文件会被保护，不会被立即删掉。</p>
+
+                <div class="form-group mt-3">
+                  <label class="form-check checkbox-label" style="user-select: none;">
+                    <input type="checkbox" id="confUseUpstreamResultUrl" class="form-check-input" />
+                    <span class="form-check-label">直接使用上游结果链接（不下载到本地）</span>
+                  </label>
+                  <p class="help text-secondary small mt-1">开启后将直接返回上游的 presignedUrl，可减少服务器磁盘占用和本地缓存压力；但该链接通常会过期，历史预览或旧结果可能失效。</p>
+                </div>
+              </section>
+
+              <div class="mt-4 d-flex align-items-center gap-3">
+                <button id="saveConfigBtn" class="btn btn-primary">保存配置</button>
+                <span id="configMsg" class="msg"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Logs Tab -->
+      <div id="logs" class="tab-pane">
+        <div class="card">
+          <div class="card-header d-flex flex-wrap align-items-center gap-2">
+            <h3 class="card-title mb-0 me-auto">请求日志</h3>
+            <div class="d-flex align-items-center gap-2">
+              <span class="text-secondary small">统计范围</span>
+              <select id="logStatsRange" class="form-select form-select-sm input-select" style="width:auto;" aria-label="日志统计范围">
+                <option value="today">今日</option>
+                <option value="yesterday">昨天</option>
+                <option value="3d">近 3 天</option>
+                <option value="7d">近 7 天</option>
+                <option value="30d">近 30 天</option>
+              </select>
+              <button id="refreshLogsBtn" class="btn btn-sm btn-outline-secondary">刷新</button>
+              <button id="clearLogsBtn" class="btn btn-sm btn-outline-danger">清空日志</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <p class="help text-secondary small mb-3">仅展示外部 OpenAI 风格请求日志。失败状态中的状态码可点击查看错误信息。</p>
+            <div class="logs-filter-bar mb-3">
+              <label class="form-check checkbox-label logs-filter-checkbox">
+                <input id="logsFailedOnly" type="checkbox" class="form-check-input" />
+                <span class="form-check-label">只看失败</span>
+              </label>
+            </div>
+            <div class="stats-grid row g-3 mb-3" id="logsStatsGrid">
+              <div class="col-6 col-md-3">
+                <div class="stat-card card">
+                  <div class="card-body">
+                    <div class="stat-label text-secondary small">图片生成数</div>
+                    <div id="logsStatsImageCount" class="stat-value h3 mb-0">-</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-6 col-md-3">
+                <div class="stat-card card">
+                  <div class="card-body">
+                    <div class="stat-label text-secondary small">视频生成数</div>
+                    <div id="logsStatsVideoCount" class="stat-value h3 mb-0">-</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-6 col-md-3">
+                <div class="stat-card card">
+                  <div class="card-body">
+                    <div class="stat-label text-secondary small">请求总数</div>
+                    <div id="logsStatsTotalCount" class="stat-value h3 mb-0">-</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-6 col-md-3">
+                <div class="stat-card card">
+                  <div class="card-body">
+                    <div class="stat-label text-secondary small">失败请求数</div>
+                    <div id="logsStatsFailCount" class="stat-value h3 mb-0">-</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p id="logStatsUpdatedAt" class="help text-secondary small mb-3"></p>
+
+            <div class="table-responsive table-wrapper">
+              <table id="logsTable" class="table table-vcenter card-table">
+                <thead>
+                  <tr>
+                    <th>时间</th>
+                    <th>状态</th>
+                    <th>耗时/秒</th>
+                    <th>进度</th>
+                    <th>账号</th>
+                    <th>模型/参数</th>
+                    <th>提示词摘要</th>
+                    <th>预览</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td colspan="8" class="empty-state text-secondary text-center py-4">暂无日志</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div id="logsPagination" class="logs-pagination d-flex align-items-center gap-2 mt-3">
+              <button id="logsPrevBtn" class="btn btn-sm btn-outline-secondary" type="button">上一页</button>
+              <span id="logsPageInfo" class="help text-secondary small">第 1 / 1 页</span>
+              <button id="logsNextBtn" class="btn btn-sm btn-outline-secondary" type="button">下一页</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <footer class="leo-footer text-center text-secondary py-3 small">
+      <span>Leo-Go 开源网关 · 交流群 <a href="https://qun.qq.com/qqun/1101086346" target="_blank" rel="noopener">1101086346</a> · <a href="https://github.com/LImingcheng07/leo-go" target="_blank" rel="noopener">GitHub</a></span>
+    </footer>
+  </div>
+
+  <div id="tokenModal" class="dialog-modal" aria-hidden="true">
+    <div class="dialog-card" role="dialog" aria-modal="true" aria-label="添加 Token">
+      <div class="d-flex align-items-center justify-content-between mb-3">
+        <h2 class="h4 mb-0">添加 Token</h2>
+        <button id="tokenModalCloseBtn" class="btn btn-sm btn-outline-secondary" type="button">关闭</button>
+      </div>
+      <div class="add-form">
+        <div class="form-group mb-2" style="display:none;">
+          <label class="form-label" for="tokenPlatformSelect">平台</label>
+          <select id="tokenPlatformSelect" class="form-select input-select" style="width: 200px;">
+            <option value="leonardo">Seedance / Leonardo</option>
+          </select>
+          <p class="help text-secondary small" id="tokenPlatformHelp">粘贴完整 Cookie 字符串。</p>
+        </div>
+        <textarea id="tokenInput" class="form-control" rows="6" placeholder="支持批量添加：一行一个 Token（例如&#10;***...&#10;***...）"></textarea>
+        <p class="help mt-1 leo-hint" id="leonardoCookieHelp" style="display:block; color:#f0c040; margin-top:4px;">
+          💡 获取方法：浏览器 F12 → Network → 刷新页面 → 点击任意 app.leonardo.ai 请求 → 复制 Request Headers 中的 <strong>Cookie</strong> 整行值
+        </p>
+        <div class="form-group mt-3">
+          <label class="form-label" for="tokenFile">或上传 Token 文件（支持多选）</label>
+          <input type="file" id="tokenFile" class="form-control" accept="text/plain,.txt,application/json,.json" multiple />
+          <p class="help text-secondary small mt-1">支持 .txt（每行一个 token）或 .json（数组/对象）。</p>
+        </div>
+        <div class="d-flex align-items-center gap-3 mt-3">
+          <button id="addBtn" class="btn btn-primary">确认添加</button>
+          <span id="addMsg" class="msg"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="refreshModal" class="dialog-modal" aria-hidden="true">
+    <div class="dialog-card" role="dialog" aria-modal="true" aria-label="导入 Cookie">
+      <div class="d-flex align-items-center justify-content-between mb-3">
+        <h2 class="h4 mb-0">导入 Cookie</h2>
+        <button id="refreshModalCloseBtn" class="btn btn-sm btn-outline-secondary" type="button">关闭</button>
+      </div>
+      <div class="config-form">
+        <div class="form-group mb-3">
+          <label class="form-label" for="cookieInput">导入 Cookie（支持单个或批量）</label>
+          <textarea id="cookieInput" class="form-control" rows="7" placeholder="支持：&#10;1) Cookie 字符串：k1=v1; k2=v2&#10;2) 浏览器导出的 cookie 数组 JSON&#10;3) 批量：[{&quot;name&quot;:&quot;账号A&quot;,&quot;cookie&quot;:&quot;k=v;...&quot;},{&quot;name&quot;:&quot;账号B&quot;,&quot;cookie&quot;:[...]}]"></textarea>
+          <p class="help text-secondary small mt-1">导入后会自动立即刷新一次。批量导入建议使用数组格式。</p>
+        </div>
+
+        <div class="form-group mb-3">
+          <label class="form-label" for="cookieFile">或上传 Cookie 文件（支持多选）</label>
+          <input type="file" id="cookieFile" class="form-control" accept="text/plain,.txt,application/json,.json" multiple />
+        </div>
+
+        <div class="d-flex align-items-center gap-3">
+          <button id="importCookieBtn" class="btn btn-outline-secondary">导入 Cookie</button>
+          <span id="refreshMsg" class="msg"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="taskReportModal" class="dialog-modal" aria-hidden="true">
+    <div class="dialog-card task-report-card" role="dialog" aria-modal="true" aria-label="任务进度">
+      <div class="d-flex align-items-center justify-content-between mb-3">
+        <h2 id="taskReportTitle" class="h4 mb-0">任务进度</h2>
+        <button id="taskReportCloseBtn" class="btn btn-sm btn-outline-secondary" type="button">关闭</button>
+      </div>
+      <div class="task-report-status-row d-flex justify-content-between align-items-center mb-2">
+        <div id="taskReportStatus" class="task-report-status">等待开始</div>
+        <div id="taskReportProgressText" class="task-report-progress-text">0 / 0</div>
+      </div>
+      <div class="progress task-report-progress mb-3" role="progressbar">
+        <div id="taskReportProgressBar" class="progress-bar task-report-progress-bar" style="width:0%"></div>
+      </div>
+      <div id="taskReportSummary" class="refresh-status mb-2">等待任务启动...</div>
+      <div id="taskReportCurrent" class="task-report-current mb-2"></div>
+      <div id="taskReportItems" class="task-report-items"></div>
+    </div>
+  </div>
+
+  <div id="cleanupConfirmModal" class="dialog-modal" aria-hidden="true">
+    <div class="dialog-card cleanup-confirm-card" role="dialog" aria-modal="true" aria-label="清理 Token">
+      <div class="d-flex align-items-center justify-content-between mb-3">
+        <h2 id="cleanupConfirmTitle" class="h4 mb-0">清理 Token</h2>
+        <button id="cleanupConfirmCloseBtn" class="btn btn-sm btn-outline-secondary" type="button">关闭</button>
+      </div>
+      <div class="cleanup-confirm-grid d-flex gap-4 mb-3">
+        <div class="cleanup-confirm-stat">
+          <span class="text-secondary small d-block" id="cleanupConfirmCountLabel">匹配 Token</span>
+          <strong id="cleanupConfirmMatchedCount" class="h3">0</strong>
+        </div>
+        <div class="cleanup-confirm-stat">
+          <span class="text-secondary small d-block">将删除刷新配置</span>
+          <strong id="cleanupConfirmProfileCount" class="h3">0</strong>
+        </div>
+      </div>
+      <div class="cleanup-confirm-actions d-flex align-items-center gap-3">
+        <button id="cleanupConfirmDeleteBtn" class="btn btn-danger" type="button">确认删除</button>
+        <span id="cleanupConfirmMsg" class="msg"></span>
+      </div>
+    </div>
+  </div>
+
+  <div id="previewModal" class="preview-modal" aria-hidden="true">
+    <div class="preview-modal-dialog" role="dialog" aria-modal="true" aria-label="媒体预览">
+      <button id="previewCloseBtn" class="preview-close btn btn-sm btn-outline-secondary" type="button">关闭</button>
+      <div id="previewContent" class="preview-content"></div>
+      <div class="preview-actions d-flex justify-content-center mt-3">
+        <a id="previewDownloadBtn" class="preview-download btn btn-primary" href="#" download>下载</a>
+      </div>
+    </div>
+  </div>
+
+  <div id="errorDetailModal" class="preview-modal" aria-hidden="true">
+    <div class="preview-modal-dialog" role="dialog" aria-modal="true" aria-label="错误详情">
+      <button id="errorDetailCloseBtn" class="preview-close btn btn-sm btn-outline-secondary" type="button">关闭</button>
+      <div class="error-detail-head mt-3">
+        <h3 id="errorDetailCode" class="h4">错误信息</h3>
+      </div>
+      <div id="errorDetailContent" class="error-detail-content"></div>
+    </div>
+  </div>
+
+  <div id="promptDetailModal" class="preview-modal" aria-hidden="true">
+    <div class="preview-modal-dialog" role="dialog" aria-modal="true" aria-label="提示词详情">
+      <button id="promptDetailCloseBtn" class="preview-close btn btn-sm btn-outline-secondary" type="button">关闭</button>
+      <div class="error-detail-head mt-3">
+        <h3 class="h4">提示词详情</h3>
+      </div>
+      <div id="promptDetailContent" class="prompt-detail-content"></div>
+    </div>
+  </div>
+
+  <div id="appToast" class="toast leo-toast" role="status" aria-live="polite"></div>
+
+  <script src="/static/vendor/tabler/tabler.min.js"></script>
+  <script src="/static/admin.js?v=20260807-1"></script>
+</body>
+</html>

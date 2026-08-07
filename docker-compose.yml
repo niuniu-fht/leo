@@ -1,0 +1,15 @@
+services:
+  leo-go:
+    build: .
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./config:/app/config
+      - ./generated:/app/generated
+    environment:
+      - TZ=Asia/Shanghai
+      # 可选：使用 Redis 做 Token/日志存储（需要额外启动 redis 服务）
+      # - REDIS_HOST=redis
+      # - REDIS_PORT=6379
+      # - REDIS_PASSWORD=your-redis-password
+    restart: unless-stopped

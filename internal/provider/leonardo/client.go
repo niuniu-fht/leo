@@ -1,0 +1,2585 @@
+package leonardo
+
+import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+)
+
+// ──────────────────────────────────────────────────────────
+// Leonardo Token 体系：
+//   用户提交完整 cookie 字符串（从浏览器复制）
+//   通过 get-session 接口换取 Cognito JWT（约1小时有效）
+//   JWT 用于调用 GraphQL API
+// ──────────────────────────────────────────────────────────
+
+const (
+	SessionURL   = "https://app.leonardo.ai/api/auth/get-session"
+	GraphQLURL   = "https://api.leonardo.ai/v1/graphql"
+	JWTMarginSec = 300 // JWT 过期前 5 分钟就刷新
+)
+
+const (
+	defaultClientTimeout   = 120 * time.Second
+	uploadInitTimeout      = 300 * time.Second
+	s3UploadRequestTimeout = 500 * time.Second
+	defaultInitWait        = 180 * time.Second
+	s3UploadMaxAttempts    = 3
+	s3UploadRetryDelay     = 2 * time.Second
+	uploadInitMaxAttempts  = 3
+	uploadInitRetryDelay   = 2 * time.Second
+)
+
+const defaultJWTRefreshMargin = 5 * time.Minute
+
+func isRetryableGraphQLError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary()) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unexpected eof") ||
+		strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "http2: server sent goaway") ||
+		strings.Contains(msg, "graphql returned 502") ||
+		strings.Contains(msg, "graphql returned 503") ||
+		strings.Contains(msg, "graphql returned 504")
+}
+
+// TokenSession holds a Leonardo session with cached JWT.
+type TokenSession struct {
+	mu                   sync.RWMutex
+	refreshMu            sync.Mutex
+	cookiePersistHandler func(string)
+	FullCookie    string    // 完整的 cookie 字符串（用户从浏览器复制的）
+	SourceCookie  string    // 最近一次从持久化层读取的原始 Cookie；用于识别外部更新
+	JWT           string    // Cognito id_token (short-lived, ~1h)
+	JWTExpiry     time.Time // JWT expiration time
+	CognitoSub    string    // e.g. "5f2e877a-0c1a-4ea1-b893-bfb4a6567a22"
+	HasuraUserID  string    // e.g. "d5b484fd-1dcc-4cf5-a7a1-9ea83abd41ce"
+	Email         string
+	Plan          string
+	LastRefreshed time.Time
+}
+
+// CookieSnapshot returns the current cookie string, including any server
+// rotation observed during a session refresh.
+func (s *TokenSession) CookieSnapshot() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.FullCookie
+}
+
+// MarkCookiePersisted records that the current rotated cookie is now stored.
+func (s *TokenSession) MarkCookiePersisted(cookie string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.FullCookie == cookie {
+		s.SourceCookie = cookie
+	}
+}
+
+// SetCookiePersistHandler registers a callback that is invoked immediately
+// after get-session rotates any cookie. It runs before JWT extraction so a
+// response that omits JWT cannot strand the persisted token on stale cookies.
+func (s *TokenSession) SetCookiePersistHandler(handler func(string)) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.cookiePersistHandler = handler
+	s.mu.Unlock()
+}
+
+func (s *TokenSession) notifyCookieRotated(cookie string) {
+	if s == nil || strings.TrimSpace(cookie) == "" {
+		return
+	}
+	s.mu.RLock()
+	handler := s.cookiePersistHandler
+	s.mu.RUnlock()
+	if handler != nil {
+		handler(cookie)
+	}
+}
+
+// Credits holds Leonardo credit/token balances.
+type Credits struct {
+	PaidTokens         int    `json:"paidTokens"`
+	SubscriptionTokens int    `json:"subscriptionTokens"`
+	RolloverTokens     int    `json:"rolloverTokens"`
+	Plan               string `json:"plan"`
+	TokenRenewalDate   string `json:"tokenRenewalDate"`
+	TotalTokens        int    `json:"totalTokens"`
+}
+
+// Client manages Leonardo API interactions.
+type Client struct {
+	httpClient           *http.Client
+	uploadInitHTTPClient *http.Client
+	uploadHTTPClient     *http.Client
+	proxy                string
+	uploadProxyMode      string
+	uploadProxy          string
+	jwtRefreshMargin     time.Duration
+}
+
+// NewClient creates a new Leonardo client.
+func NewClient(proxy string) *Client {
+	httpClient, _ := newLeonardoHTTPClient(proxy, defaultClientTimeout)
+	uploadInitHTTPClient, _ := newLeonardoHTTPClient(proxy, uploadInitTimeout)
+	uploadHTTPClient, _ := newLeonardoHTTPClient(proxy, s3UploadRequestTimeout)
+	return &Client{
+		httpClient:           httpClient,
+		uploadInitHTTPClient: uploadInitHTTPClient,
+		uploadHTTPClient:     uploadHTTPClient,
+		proxy:                proxy,
+		uploadProxyMode:      "basic",
+		jwtRefreshMargin:     defaultJWTRefreshMargin,
+	}
+}
+
+// NewClientWithUploadProxyConfig creates a Leonardo client and applies the
+// persisted S3 upload proxy policy. Startup and runtime config reloads should
+// both use this constructor so they cannot silently diverge.
+func NewClientWithUploadProxyConfig(proxy string, uploadMode string, uploadProxy string) (*Client, error) {
+	client := NewClient(proxy)
+	if err := client.SetUploadProxyConfig(uploadMode, uploadProxy); err != nil {
+		return nil, err
+	}
+	return client, nil
+}
+
+func newLeonardoHTTPClient(proxy string, timeout time.Duration) (*http.Client, error) {
+	transport := &http.Transport{}
+	if strings.TrimSpace(proxy) != "" {
+		proxyURL, err := url.Parse(strings.TrimSpace(proxy))
+		if err != nil {
+			return nil, fmt.Errorf("invalid proxy url: %w", err)
+		}
+		transport.Proxy = http.ProxyURL(proxyURL)
+	}
+	return &http.Client{
+		Transport: transport,
+		Timeout:   timeout,
+	}, nil
+}
+
+func (c *Client) SetUploadProxyConfig(mode string, proxy string) error {
+	if c == nil {
+		return nil
+	}
+
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = "basic"
+	}
+
+	var (
+		uploadClient *http.Client
+		err          error
+	)
+	switch mode {
+	case "basic":
+		uploadClient, err = newLeonardoHTTPClient(c.proxy, s3UploadRequestTimeout)
+	case "direct":
+		uploadClient, err = newLeonardoHTTPClient("", s3UploadRequestTimeout)
+	case "custom":
+		uploadClient, err = newLeonardoHTTPClient(proxy, s3UploadRequestTimeout)
+	default:
+		return fmt.Errorf("unsupported upload proxy mode: %s", mode)
+	}
+	if err != nil {
+		return err
+	}
+
+	c.uploadHTTPClient = uploadClient
+	c.uploadProxyMode = mode
+	c.uploadProxy = strings.TrimSpace(proxy)
+	return nil
+}
+
+func (c *Client) SetJWTRefreshMarginMinutes(minutes int) {
+	if c == nil {
+		return
+	}
+	if minutes < 0 {
+		minutes = 0
+	}
+	if minutes > 1440 {
+		minutes = 1440
+	}
+	c.jwtRefreshMargin = time.Duration(minutes) * time.Minute
+}
+
+func (c *Client) jwtRefreshMarginDuration() time.Duration {
+	if c == nil {
+		return defaultJWTRefreshMargin
+	}
+	if c.jwtRefreshMargin < 0 {
+		return 0
+	}
+	return c.jwtRefreshMargin
+}
+
+// ──────────────────────────────────────────────────────────
+// JWT Parsing (no verification, just decode payload)
+// ──────────────────────────────────────────────────────────
+
+type jwtClaims struct {
+	Sub           string   `json:"sub"`
+	Email         string   `json:"email"`
+	Exp           int64    `json:"exp"`
+	Iat           int64    `json:"iat"`
+	HasuraClaims  string   `json:"https://hasura.io/jwt/claims"`
+	CognitoGroups []string `json:"cognito:groups"`
+}
+
+type hasuraClaims struct {
+	UserID       string   `json:"x-hasura-user-id"`
+	DefaultRole  string   `json:"x-hasura-default-role"`
+	AllowedRoles []string `json:"x-hasura-allowed-roles"`
+}
+
+// parseJWT decodes the JWT payload without verification.
+func parseJWT(token string) (*jwtClaims, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid JWT format: expected 3 parts, got %d", len(parts))
+	}
+
+	// Base64url decode the payload
+	payload := parts[1]
+	// Add padding if needed
+	switch len(payload) % 4 {
+	case 2:
+		payload += "=="
+	case 3:
+		payload += "="
+	}
+	decoded, err := base64.URLEncoding.DecodeString(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode JWT payload: %w", err)
+	}
+
+	var claims jwtClaims
+	if err := json.Unmarshal(decoded, &claims); err != nil {
+		return nil, fmt.Errorf("failed to parse JWT claims: %w", err)
+	}
+	return &claims, nil
+}
+
+// parseHasuraClaims extracts hasura user ID from JWT claims.
+func parseHasuraClaims(raw string) (*hasuraClaims, error) {
+	var hc hasuraClaims
+	if err := json.Unmarshal([]byte(raw), &hc); err != nil {
+		return nil, err
+	}
+	return &hc, nil
+}
+
+// ──────────────────────────────────────────────────────────
+// Cookie 处理工具
+// ──────────────────────────────────────────────────────────
+
+// NormalizeCookie cleans up the cookie string.
+// Accepts both:
+//   - Raw cookie header: "k1=v1; k2=v2; ..."
+//   - Just session_token value (legacy): "AlYJi..."
+func NormalizeCookie(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	// If it looks like a full cookie string (contains "=")
+	if strings.Contains(raw, "=") && strings.Contains(raw, ";") {
+		return raw
+	}
+	// If it looks like a single cookie value (no "="), assume it's session_token
+	if !strings.Contains(raw, "=") {
+		return "__Secure-better-auth.session_token=" + raw
+	}
+	// Could be a single k=v pair without semicolons
+	return raw
+}
+
+// mergeResponseCookies keeps the browser session current when Better Auth
+// rotates the session token or one of its session_data shards.
+func mergeResponseCookies(existing string, responseCookies []*http.Cookie) string {
+	if len(responseCookies) == 0 {
+		return existing
+	}
+
+	values := make([]string, 0, 16)
+	index := make(map[string]int)
+	for _, part := range strings.Split(existing, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		name, _, ok := strings.Cut(part, "=")
+		if !ok || strings.TrimSpace(name) == "" {
+			continue
+		}
+		name = strings.TrimSpace(name)
+		index[name] = len(values)
+		values = append(values, part)
+	}
+	for _, cookie := range responseCookies {
+		if cookie == nil || strings.TrimSpace(cookie.Name) == "" {
+			continue
+		}
+		name := strings.TrimSpace(cookie.Name)
+		if isCookieDeletion(cookie) {
+			if pos, ok := index[name]; ok {
+				values = append(values[:pos], values[pos+1:]...)
+				delete(index, name)
+				for i := pos; i < len(values); i++ {
+					cookieName, _, _ := strings.Cut(values[i], "=")
+					index[strings.TrimSpace(cookieName)] = i
+				}
+			}
+			continue
+		}
+		value := name + "=" + cookie.Value
+		if pos, ok := index[name]; ok {
+			values[pos] = value
+		} else {
+			index[name] = len(values)
+			values = append(values, value)
+		}
+	}
+	return strings.Join(values, "; ")
+}
+
+func isCookieDeletion(cookie *http.Cookie) bool {
+	if cookie == nil {
+		return false
+	}
+	if cookie.MaxAge < 0 {
+		return true
+	}
+	return !cookie.Expires.IsZero() && cookie.Expires.Before(time.Now())
+}
+
+func deletesCriticalSessionCookie(responseCookies []*http.Cookie) bool {
+	finalDeletion := make(map[string]bool)
+	for _, cookie := range responseCookies {
+		if cookie == nil {
+			continue
+		}
+		name := strings.TrimSpace(cookie.Name)
+		if name == "__Secure-better-auth.session_token" || strings.HasPrefix(name, "__Secure-better-auth.session_data.") {
+			// Multiple Set-Cookie headers for the same name are applied in order;
+			// only the final action determines whether the resulting cookie is gone.
+			finalDeletion[name] = isCookieDeletion(cookie)
+		}
+	}
+	for _, deleted := range finalDeletion {
+		if deleted {
+			return true
+		}
+	}
+	return false
+}
+
+// ExtractSessionToken extracts __Secure-better-auth.session_token from cookie string.
+func ExtractSessionToken(cookieStr string) string {
+	for _, part := range strings.Split(cookieStr, ";") {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "__Secure-better-auth.session_token=") {
+			return strings.TrimPrefix(part, "__Secure-better-auth.session_token=")
+		}
+	}
+	return ""
+}
+
+// ──────────────────────────────────────────────────────────
+// Session Refresh: cookie → JWT
+// ──────────────────────────────────────────────────────────
+
+// sessionResponse is the response from get-session.
+type sessionResponse struct {
+	Session struct {
+		Token string `json:"token"`
+	} `json:"session"`
+}
+
+// RefreshSession calls get-session to obtain a fresh JWT.
+func (c *Client) RefreshSession(session *TokenSession) error {
+	if session == nil {
+		return fmt.Errorf("session is required")
+	}
+	session.refreshMu.Lock()
+	defer session.refreshMu.Unlock()
+
+	req, err := http.NewRequest("GET", SessionURL, nil)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	req.Close = true
+
+	// 发送完整 cookie 字符串，包含所有必要的 cookie
+	cookieStr := NormalizeCookie(session.CookieSnapshot())
+	req.Header.Set("Cookie", cookieStr)
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
+	req.Header.Set("Referer", "https://app.leonardo.ai/")
+	req.Header.Set("Origin", "https://app.leonardo.ai")
+	req.Header.Set("Sec-Fetch-Dest", "empty")
+	req.Header.Set("Sec-Fetch-Mode", "cors")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Sec-Ch-Ua", `"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"`)
+	req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
+	req.Header.Set("Sec-Ch-Ua-Platform", `"Windows"`)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("get-session request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read response: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return formatSessionHTTPError(resp.StatusCode, body)
+	}
+
+	// Better Auth may rotate the session token and/or sharded session_data
+	// cookies. Non-destructive rotations are persisted immediately so a response
+	// without a JWT can still recover on the next attempt. Deletions of critical
+	// session cookies are held until a valid JWT confirms the response, otherwise
+	// an upstream logout response could permanently replace a recoverable cookie
+	// with only unrelated cookies such as CF_Access_Token.
+	responseCookies := resp.Cookies()
+	updatedCookie := mergeResponseCookies(cookieStr, responseCookies)
+	deferCriticalDeletion := updatedCookie != cookieStr && deletesCriticalSessionCookie(responseCookies)
+	if updatedCookie != cookieStr && !deferCriticalDeletion {
+		session.mu.Lock()
+		session.FullCookie = updatedCookie
+		session.mu.Unlock()
+		session.notifyCookieRotated(updatedCookie)
+	}
+
+	// Parse response - Leonardo's get-session returns JSON with session info
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("parse session response: %w (body: %s)", err, string(body[:min(len(body), 200)]))
+	}
+
+	// Try to extract token from various response structures
+	jwt := extractJWT(result)
+	if jwt == "" {
+		if deferCriticalDeletion {
+			log.Printf("[Leonardo] ignored critical session cookie deletion because get-session returned no JWT")
+		}
+		return fmt.Errorf("no JWT found in session response, body keys: %v", getKeys(result))
+	}
+
+	// Parse the JWT to get expiry and user info
+	claims, err := parseJWT(jwt)
+	if err != nil {
+		return fmt.Errorf("parse JWT: %w", err)
+	}
+	if deferCriticalDeletion {
+		session.mu.Lock()
+		session.FullCookie = updatedCookie
+		session.mu.Unlock()
+		session.notifyCookieRotated(updatedCookie)
+	}
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+
+	session.JWT = jwt
+	session.JWTExpiry = time.Unix(claims.Exp, 0)
+	session.CognitoSub = claims.Sub
+	session.Email = claims.Email
+	session.LastRefreshed = time.Now()
+
+	// Extract Hasura user ID
+	if claims.HasuraClaims != "" {
+		if hc, err := parseHasuraClaims(claims.HasuraClaims); err == nil {
+			session.HasuraUserID = hc.UserID
+		}
+	}
+
+	log.Printf("[Leonardo] JWT refreshed for %s, expires %s, user=%s",
+		session.Email, session.JWTExpiry.Format(time.RFC3339), session.HasuraUserID)
+
+	return nil
+}
+
+func formatSessionHTTPError(statusCode int, body []byte) error {
+	if statusCode == http.StatusTooManyRequests {
+		return fmt.Errorf("Leonardo rate limited get-session (429). Wait a minute before retrying refresh")
+	}
+
+	snippet := strings.TrimSpace(string(body))
+	if snippet == "" {
+		return fmt.Errorf("get-session returned %d", statusCode)
+	}
+
+	snippetLower := strings.ToLower(snippet)
+	if strings.HasPrefix(snippetLower, "<!doctype html") || strings.HasPrefix(snippetLower, "<html") {
+		return fmt.Errorf("get-session returned %d with an HTML error page", statusCode)
+	}
+
+	if len(snippet) > 200 {
+		snippet = snippet[:200]
+	}
+	return fmt.Errorf("get-session returned %d: %s", statusCode, snippet)
+}
+
+// extractJWT tries to find the JWT in the session response.
+func extractJWT(data map[string]interface{}) string {
+	// Try data.session.token
+	if sess, ok := data["session"].(map[string]interface{}); ok {
+		if token, ok := sess["token"].(string); ok && strings.Contains(token, ".") {
+			return token
+		}
+		// Try session.idToken
+		if token, ok := sess["idToken"].(string); ok && strings.Contains(token, ".") {
+			return token
+		}
+		// Try session.accessToken
+		if token, ok := sess["accessToken"].(string); ok && strings.Contains(token, ".") {
+			return token
+		}
+	}
+	// Try data.token
+	if token, ok := data["token"].(string); ok && strings.Contains(token, ".") {
+		return token
+	}
+	// Try data.idToken
+	if token, ok := data["idToken"].(string); ok && strings.Contains(token, ".") {
+		return token
+	}
+	// Try data.user.token
+	if user, ok := data["user"].(map[string]interface{}); ok {
+		if token, ok := user["token"].(string); ok && strings.Contains(token, ".") {
+			return token
+		}
+	}
+	return ""
+}
+
+// getKeys returns all keys of a map for debugging.
+func getKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// ──────────────────────────────────────────────────────────
+// EnsureValidJWT: auto-refresh if expired
+// ──────────────────────────────────────────────────────────
+
+// EnsureValidJWT checks if the JWT is still valid, refreshes if needed.
+func (c *Client) EnsureValidJWT(session *TokenSession) error {
+	session.mu.RLock()
+	needsRefresh := session.JWT == "" || time.Now().Add(c.jwtRefreshMarginDuration()).After(session.JWTExpiry)
+	session.mu.RUnlock()
+
+	if needsRefresh {
+		log.Printf("[Leonardo] JWT expired or missing, refreshing...")
+		return c.RefreshSession(session)
+	}
+	return nil
+}
+
+// IsJWTValid returns true if the cached JWT is still valid.
+func (s *TokenSession) IsJWTValid() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.JWT != "" && time.Now().Before(s.JWTExpiry)
+}
+
+// GetJWTRemainingSeconds returns seconds until JWT expiry.
+func (s *TokenSession) GetJWTRemainingSeconds() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.JWT == "" {
+		return 0
+	}
+	remaining := time.Until(s.JWTExpiry).Seconds()
+	if remaining < 0 {
+		return 0
+	}
+	return int(remaining)
+}
+
+// ──────────────────────────────────────────────────────────
+// Credits Query via GraphQL
+// ──────────────────────────────────────────────────────────
+
+const getTokensQuery = `query GetUserTokensFromSub($sub: String) {
+  user_details(where: {cognitoId: {_eq: $sub}}) {
+    id
+    plan
+    subscriptionGptTokens
+    subscriptionModelTokens
+    tokenRenewalDate
+    streamTokens
+    paidTokens
+    subscriptionTokens
+    rolloverTokens
+  }
+}`
+
+// graphqlRequest is the request body for GraphQL calls.
+type graphqlRequest struct {
+	OperationName string                 `json:"operationName"`
+	Variables     map[string]interface{} `json:"variables"`
+	Query         string                 `json:"query"`
+}
+
+// QueryCredits fetches the user's token balance.
+func (c *Client) QueryCredits(session *TokenSession) (*Credits, error) {
+	// Ensure we have a valid JWT
+	if err := c.EnsureValidJWT(session); err != nil {
+		return nil, fmt.Errorf("ensure JWT: %w", err)
+	}
+
+	session.mu.RLock()
+	jwt := session.JWT
+	sub := session.CognitoSub
+	session.mu.RUnlock()
+
+	// Build GraphQL request
+	gqlReq := graphqlRequest{
+		OperationName: "GetUserTokensFromSub",
+		Variables:     map[string]interface{}{"sub": sub},
+		Query:         getTokensQuery,
+	}
+
+	reqBody, err := json.Marshal(gqlReq)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", GraphQLURL, strings.NewReader(string(reqBody)))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Origin", "https://app.leonardo.ai")
+	req.Header.Set("Referer", "https://app.leonardo.ai/")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("graphql request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("graphql returned %d: %s", resp.StatusCode, string(body[:min(len(body), 300)]))
+	}
+
+	// Parse response
+	var gqlResp struct {
+		Data struct {
+			UserDetails []struct {
+				ID                      string `json:"id"`
+				Plan                    string `json:"plan"`
+				PaidTokens              int    `json:"paidTokens"`
+				SubscriptionTokens      int    `json:"subscriptionTokens"`
+				RolloverTokens          int    `json:"rolloverTokens"`
+				SubscriptionGptTokens   int    `json:"subscriptionGptTokens"`
+				SubscriptionModelTokens int    `json:"subscriptionModelTokens"`
+				TokenRenewalDate        string `json:"tokenRenewalDate"`
+				StreamTokens            int    `json:"streamTokens"`
+			} `json:"user_details"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+
+	if err := json.Unmarshal(body, &gqlResp); err != nil {
+		return nil, fmt.Errorf("parse graphql response: %w", err)
+	}
+
+	if len(gqlResp.Errors) > 0 {
+		return nil, fmt.Errorf("graphql error: %s", gqlResp.Errors[0].Message)
+	}
+
+	if len(gqlResp.Data.UserDetails) == 0 {
+		return nil, fmt.Errorf("no user details found for sub %s", sub)
+	}
+
+	ud := gqlResp.Data.UserDetails[0]
+	credits := &Credits{
+		PaidTokens:         ud.PaidTokens,
+		SubscriptionTokens: ud.SubscriptionTokens,
+		RolloverTokens:     ud.RolloverTokens,
+		Plan:               ud.Plan,
+		TokenRenewalDate:   ud.TokenRenewalDate,
+		TotalTokens:        ud.PaidTokens + ud.SubscriptionTokens + ud.RolloverTokens,
+	}
+
+	// Update session plan info
+	session.mu.Lock()
+	session.Plan = ud.Plan
+	session.mu.Unlock()
+
+	return credits, nil
+}
+
+// ──────────────────────────────────────────────────────────
+// Validate: check if cookie is valid
+// ──────────────────────────────────────────────────────────
+
+// ValidateToken checks if the cookie can produce a valid JWT and has credits.
+func (c *Client) ValidateToken(fullCookie string) (*TokenSession, *Credits, error) {
+	session := &TokenSession{
+		FullCookie: fullCookie,
+	}
+
+	// Step 1: Refresh to get JWT
+	if err := c.RefreshSession(session); err != nil {
+		return nil, nil, fmt.Errorf("token validation failed: %w", err)
+	}
+
+	// Step 2: Query credits
+	credits, err := c.QueryCredits(session)
+	if err != nil {
+		return session, nil, fmt.Errorf("credits query failed: %w", err)
+	}
+
+	return session, credits, nil
+}
+
+// ──────────────────────────────────────────────────────────
+// Video Generation via GraphQL
+// ──────────────────────────────────────────────────────────
+
+const generateMutation = `mutation Generate($request: CreateGenerationRequest!) {
+  generate(request: $request) {
+    apiCreditCost
+    generationId
+    __typename
+  }
+}`
+
+const statusQuery = `query GetAIGenerationFeedStatuses($where: generations_bool_exp = {}) {
+  generations(where: $where) {
+    id
+    status
+    __typename
+  }
+}`
+
+const generationDetailQuery = `query GetGenerationDetail($where: generations_bool_exp = {}) {
+  generations(where: $where) {
+    id
+    status
+    prompt
+    modelId
+    motionModel
+    imageWidth
+    imageHeight
+    createdAt
+    generated_images(order_by: [{url: desc}]) {
+      id
+      url
+      motionMP4URL
+      motionGIFURL
+      __typename
+    }
+    __typename
+  }
+}`
+
+var generationFailureReasonFields = []string{
+	"statusReason",
+	"failureReason",
+	"errorMessage",
+	"statusMessage",
+}
+
+var generationFailureReasonKeywords = []string{
+	"moder",
+	"reason",
+	"error",
+	"message",
+	"fail",
+}
+
+// ImageRef is a single image reference for guided generation (multi-image reference).
+type ImageRef struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`     // "UPLOADED" or "GENERATED"
+	Strength string `json:"strength"` // "LOW", "MID", "HIGH"
+}
+
+// FrameRef is a single start/end frame reference.
+type FrameRef struct {
+	ID   string `json:"id"`
+	Type string `json:"type"` // "UPLOADED" or "GENERATED"
+}
+
+// VideoRef is a video reference for video-to-video guidance.
+type VideoRef struct {
+	ID       string  `json:"id"`
+	Type     string  `json:"type"`     // "UPLOADED"
+	Duration float64 `json:"duration"` // video duration in seconds
+}
+
+// AudioRef is an audio reference for audio-guided generation.
+type AudioRef struct {
+	ID       string  `json:"id"`
+	Type     string  `json:"type"`     // "UPLOADED"
+	Duration float64 `json:"duration"` // audio duration in seconds
+}
+
+// GenerateRequest is the input for video generation.
+type GenerateRequest struct {
+	Model  string         `json:"model"`
+	Public bool           `json:"public"`
+	Params GenerateParams `json:"parameters"`
+}
+
+// GenerateParams are the generation parameters.
+type GenerateParams struct {
+	Prompt         string     `json:"prompt"`
+	Mode           string     `json:"mode"`           // e.g. "RESOLUTION_720"
+	PromptEnhance  string     `json:"prompt_enhance"` // "OFF" or "ON"
+	Quantity       int        `json:"quantity"`
+	Duration       int        `json:"duration"` // 4-15 seconds
+	MotionHasAudio bool       `json:"motion_has_audio"`
+	Width          int        `json:"width"`
+	Height         int        `json:"height"`
+	Seed           int        `json:"seed"`                  // -1 for random
+	ImageRefs      []ImageRef `json:"image_refs,omitempty"`  // multi-image reference guidance
+	StartFrame     []FrameRef `json:"start_frame,omitempty"` // start frame (first frame)
+	EndFrame       []FrameRef `json:"end_frame,omitempty"`   // end frame (last frame)
+	VideoRefs      []VideoRef `json:"video_refs,omitempty"`  // video reference guidance
+	AudioRefs      []AudioRef `json:"audio_refs,omitempty"`  // audio reference guidance
+}
+
+// GenerateResponse is the response from the Generate mutation.
+type GenerateResponse struct {
+	GenerationID  string `json:"generationId"`
+	APICreditCost int    `json:"apiCreditCost"`
+}
+
+// GenerationStatus holds the status of a generation.
+type GenerationStatus struct {
+	ID     string `json:"id"`
+	Status string `json:"status"` // PENDING, COMPLETE, FAILED
+}
+
+// GenerationDetail holds detailed generation info including video URLs.
+type GenerationDetail struct {
+	ID        string           `json:"id"`
+	Status    string           `json:"status"`
+	Prompt    string           `json:"prompt"`
+	ModelID   string           `json:"modelId"`
+	Width     int              `json:"imageWidth"`
+	Height    int              `json:"imageHeight"`
+	CreatedAt string           `json:"createdAt"`
+	Images    []GeneratedImage `json:"generated_images"`
+}
+
+// GeneratedImage holds info about a generated image/video.
+type GeneratedImage struct {
+	ID        string `json:"id"`
+	URL       string `json:"url"`
+	MotionMP4 string `json:"motionMP4URL"`
+	MotionGIF string `json:"motionGIFURL"`
+}
+
+func inferResolutionMode(width int, height int) string {
+	return "RESOLUTION_720"
+}
+
+func inferResolutionModeForModel(modelID string, width int, height int) string {
+	if isMinimaxH3Model(modelID) {
+		return ""
+	}
+	if isKlingO3Model(modelID) {
+		return "RESOLUTION_1080"
+	}
+	if isSeedance480pModel(modelID) {
+		return ""
+	}
+	return inferResolutionMode(width, height)
+}
+
+func isSora2Model(modelID string) bool {
+	modelID = strings.TrimSpace(modelID)
+	return strings.EqualFold(modelID, "sora-2") || strings.EqualFold(modelID, "sora2")
+}
+
+func isKlingO3Model(modelID string) bool {
+	modelID = strings.TrimSpace(modelID)
+	return modelID == "kling-video-o-3" || modelID == "kling-o3" || modelID == "ko3"
+}
+
+func isMinimaxH3Model(modelID string) bool {
+	switch strings.TrimSpace(modelID) {
+	case "hailuo-03", "minimax-h3":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSeedance480pModel(modelID string) bool {
+	switch strings.TrimSpace(modelID) {
+	case "seedance-2.0-480p", "video-2.0-480p", "seedance-2.0-fast-480p", "video-2.0-fast-480p", "seedance-2.0-mini-480p", "video-2.0-mini-480p":
+		return true
+	default:
+		return false
+	}
+}
+
+func seedance480pUpstreamModel(modelID string) string {
+	switch strings.TrimSpace(modelID) {
+	case "seedance-2.0-480p", "video-2.0-480p":
+		return "seedance-2.0"
+	case "seedance-2.0-fast-480p", "video-2.0-fast-480p":
+		return "seedance-2.0-fast"
+	case "seedance-2.0-mini-480p", "video-2.0-mini-480p":
+		return "seedance-2.0-mini"
+	default:
+		return strings.TrimSpace(modelID)
+	}
+}
+
+func isAllowedSora2Duration(duration int) bool {
+	switch duration {
+	case 4, 8, 12:
+		return true
+	default:
+		return false
+	}
+}
+
+func isAllowedSora2Size(width int, height int) bool {
+	return (width == 720 && height == 1280) || (width == 1280 && height == 720)
+}
+
+func isAllowedMinimaxH3Size(width int, height int) bool {
+	return (width == 2560 && height == 1440) ||
+		(width == 1440 && height == 2560) ||
+		(width == 1440 && height == 1440) ||
+		(width == 1920 && height == 1440) ||
+		(width == 1440 && height == 1920) ||
+		(width == 3360 && height == 1440)
+}
+
+func isAllowedKlingO3Duration(duration int) bool {
+	return duration >= 3 && duration <= 15
+}
+
+func isAllowedKlingO3Size(width int, height int) bool {
+	return (width == 1440 && height == 1440) || (width == 1080 && height == 1920) || (width == 1920 && height == 1080)
+}
+
+func isAllowedKlingO3VideoRefDuration(duration int) bool {
+	return duration >= 3 && duration <= 15
+}
+
+func isAllowedKlingO3VideoRefSize(width int, height int) bool {
+	return (width == 0 && height == 0) || isAllowedKlingO3Size(width, height)
+}
+
+func isAllowedSeedance480pSize(width int, height int) bool {
+	return (width == 496 && height == 864) || (width == 864 && height == 496) || (width == 640 && height == 640)
+}
+
+// doGraphQL sends a GraphQL request and returns the raw response body.
+func (c *Client) doGraphQL(jwt string, gqlReq graphqlRequest) ([]byte, error) {
+	return c.doGraphQLWithClient(c.httpClient, jwt, gqlReq)
+}
+
+func (c *Client) doGraphQLWithClient(client *http.Client, jwt string, gqlReq graphqlRequest) ([]byte, error) {
+	reqBody, err := json.Marshal(gqlReq)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", GraphQLURL, strings.NewReader(string(reqBody)))
+	if err != nil {
+		return nil, err
+	}
+	req.Close = true
+
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Origin", "https://app.leonardo.ai")
+	req.Header.Set("Referer", "https://app.leonardo.ai/")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
+	req.Header.Set("X-Leo-Schema-Version", "latest")
+
+	if client == nil {
+		client = c.httpClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("graphql request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("graphql returned %d: %s", resp.StatusCode, string(body[:min(len(body), 500)]))
+	}
+
+	return body, nil
+}
+
+// Generate submits a video generation request.
+func (c *Client) Generate(session *TokenSession, genReq *GenerateRequest) (*GenerateResponse, error) {
+	if err := c.EnsureValidJWT(session); err != nil {
+		return nil, fmt.Errorf("ensure JWT: %w", err)
+	}
+
+	session.mu.RLock()
+	jwt := session.JWT
+	session.mu.RUnlock()
+
+	genReq.Model = strings.TrimSpace(genReq.Model)
+	if genReq.Model == "" {
+		genReq.Model = "seedance-2.0-fast"
+	}
+	if strings.EqualFold(genReq.Model, "sora2") {
+		genReq.Model = "sora-2"
+	}
+	if strings.EqualFold(genReq.Model, "kling-o3") || strings.EqualFold(genReq.Model, "ko3") {
+		genReq.Model = "kling-video-o-3"
+	}
+	if strings.EqualFold(genReq.Model, "minimax-h3") {
+		genReq.Model = "hailuo-03"
+	}
+	isKlingO3VideoRefMode := isKlingO3Model(genReq.Model) && len(genReq.Params.VideoRefs) > 0
+	if genReq.Params.Width == 0 {
+		if isKlingO3VideoRefMode {
+			genReq.Params.Width = 0
+		} else if isKlingO3Model(genReq.Model) {
+			genReq.Params.Width = 1080
+		} else if isMinimaxH3Model(genReq.Model) {
+			genReq.Params.Width = 2560
+		} else if isSora2Model(genReq.Model) {
+			genReq.Params.Width = 720
+		} else if isSeedance480pModel(genReq.Model) {
+			genReq.Params.Width = 864
+		} else {
+			genReq.Params.Width = 1280
+		}
+	}
+	if genReq.Params.Height == 0 {
+		if isKlingO3VideoRefMode {
+			genReq.Params.Height = 0
+		} else if isKlingO3Model(genReq.Model) {
+			genReq.Params.Height = 1920
+		} else if isMinimaxH3Model(genReq.Model) {
+			genReq.Params.Height = 1440
+		} else if isSora2Model(genReq.Model) {
+			genReq.Params.Height = 1280
+		} else if isSeedance480pModel(genReq.Model) {
+			genReq.Params.Height = 496
+		} else {
+			genReq.Params.Height = 720
+		}
+	}
+	// Set defaults
+	if genReq.Params.Mode == "" {
+		genReq.Params.Mode = inferResolutionModeForModel(genReq.Model, genReq.Params.Width, genReq.Params.Height)
+	}
+	if genReq.Params.Quantity == 0 {
+		genReq.Params.Quantity = 1
+	}
+	if genReq.Params.Duration == 0 && isSora2Model(genReq.Model) {
+		genReq.Params.Duration = 8
+	}
+	if genReq.Params.Duration == 0 && isKlingO3Model(genReq.Model) {
+		if isKlingO3VideoRefMode {
+			genReq.Params.Duration = 5
+		} else {
+			genReq.Params.Duration = 3
+		}
+	}
+	if genReq.Params.Duration == 0 && isMinimaxH3Model(genReq.Model) {
+		genReq.Params.Duration = 5
+	}
+	if genReq.Params.Duration == 0 {
+		genReq.Params.Duration = 4
+	}
+	if genReq.Params.Seed == 0 {
+		genReq.Params.Seed = -1
+	}
+	if isSora2Model(genReq.Model) {
+		if !isAllowedSora2Duration(genReq.Params.Duration) {
+			return nil, fmt.Errorf("sora2 duration must be 4, 8, or 12 seconds")
+		}
+		if !isAllowedSora2Size(genReq.Params.Width, genReq.Params.Height) {
+			return nil, fmt.Errorf("sora2 size must be 720x1280 or 1280x720")
+		}
+		if len(genReq.Params.StartFrame) > 1 {
+			return nil, fmt.Errorf("sora2 supports at most one uploaded image")
+		}
+	}
+	if isKlingO3Model(genReq.Model) {
+		if isKlingO3VideoRefMode {
+			if !isAllowedKlingO3VideoRefDuration(genReq.Params.Duration) {
+				return nil, fmt.Errorf("ko3 video reference duration must be between 3 and 15 seconds")
+			}
+			if !isAllowedKlingO3VideoRefSize(genReq.Params.Width, genReq.Params.Height) {
+				return nil, fmt.Errorf("ko3 video reference size must be 0x0, 1440x1440, 1080x1920, or 1920x1080")
+			}
+		} else {
+			if !isAllowedKlingO3Duration(genReq.Params.Duration) {
+				return nil, fmt.Errorf("ko3 duration must be between 3 and 15 seconds")
+			}
+			if !isAllowedKlingO3Size(genReq.Params.Width, genReq.Params.Height) {
+				return nil, fmt.Errorf("ko3 size must be 1440x1440, 1080x1920, or 1920x1080")
+			}
+		}
+	}
+	if isMinimaxH3Model(genReq.Model) {
+		if genReq.Params.Duration < 5 || genReq.Params.Duration > 15 {
+			return nil, fmt.Errorf("minimax-h3 duration must be between 5 and 15 seconds")
+		}
+		if !isAllowedMinimaxH3Size(genReq.Params.Width, genReq.Params.Height) {
+			return nil, fmt.Errorf("minimax-h3 size must be one of 2560x1440, 1440x2560, 1440x1440, 1920x1440, 1440x1920, or 3360x1440")
+		}
+		if len(genReq.Params.ImageRefs) > 5 {
+			return nil, fmt.Errorf("minimax-h3 supports at most 5 image references")
+		}
+		if len(genReq.Params.StartFrame) > 1 || len(genReq.Params.EndFrame) > 1 {
+			return nil, fmt.Errorf("minimax-h3 supports at most one start frame and one end frame")
+		}
+		hasFrames := len(genReq.Params.StartFrame) > 0 || len(genReq.Params.EndFrame) > 0
+		if hasFrames && len(genReq.Params.ImageRefs) > 0 {
+			return nil, fmt.Errorf("minimax-h3 image-reference mode cannot be combined with start/end-frame mode")
+		}
+		if len(genReq.Params.VideoRefs) > 0 {
+			return nil, fmt.Errorf("minimax-h3 does not support video_reference")
+		}
+		if len(genReq.Params.AudioRefs) > 0 && (len(genReq.Params.ImageRefs) == 0 || hasFrames) {
+			return nil, fmt.Errorf("minimax-h3 audio_reference is only supported in image-reference mode")
+		}
+	}
+	if isSeedance480pModel(genReq.Model) {
+		if !isAllowedSeedance480pSize(genReq.Params.Width, genReq.Params.Height) {
+			return nil, fmt.Errorf("seedance 480p size must be 496x864, 864x496, or 640x640")
+		}
+	}
+
+	params := map[string]interface{}{}
+	if isSora2Model(genReq.Model) {
+		params = map[string]interface{}{
+			"height":   genReq.Params.Height,
+			"width":    genReq.Params.Width,
+			"duration": genReq.Params.Duration,
+			"quantity": genReq.Params.Quantity,
+			"prompt":   genReq.Params.Prompt,
+			"mode":     genReq.Params.Mode,
+		}
+	} else if isMinimaxH3Model(genReq.Model) {
+		params = map[string]interface{}{
+			"height":           genReq.Params.Height,
+			"width":            genReq.Params.Width,
+			"duration":         genReq.Params.Duration,
+			"quantity":         genReq.Params.Quantity,
+			"prompt":           genReq.Params.Prompt,
+			"motion_has_audio": genReq.Params.MotionHasAudio,
+		}
+	} else if isKlingO3Model(genReq.Model) {
+		params = map[string]interface{}{
+			"height":           genReq.Params.Height,
+			"width":            genReq.Params.Width,
+			"duration":         genReq.Params.Duration,
+			"mode":             genReq.Params.Mode,
+			"motion_has_audio": genReq.Params.MotionHasAudio,
+			"quantity":         genReq.Params.Quantity,
+			"prompt":           genReq.Params.Prompt,
+		}
+	} else {
+		params = map[string]interface{}{
+			"prompt":           genReq.Params.Prompt,
+			"quantity":         genReq.Params.Quantity,
+			"duration":         genReq.Params.Duration,
+			"motion_has_audio": genReq.Params.MotionHasAudio,
+			"width":            genReq.Params.Width,
+			"height":           genReq.Params.Height,
+			"seed":             genReq.Params.Seed,
+		}
+		if strings.TrimSpace(genReq.Params.Mode) != "" {
+			params["mode"] = genReq.Params.Mode
+		}
+		if strings.TrimSpace(genReq.Params.PromptEnhance) != "" {
+			params["prompt_enhance"] = strings.TrimSpace(genReq.Params.PromptEnhance)
+		}
+	}
+
+	// Build guidances map (supports image_reference, start_frame, end_frame)
+	hasGuidances := len(genReq.Params.ImageRefs) > 0 || len(genReq.Params.StartFrame) > 0 || len(genReq.Params.EndFrame) > 0 || len(genReq.Params.VideoRefs) > 0 || len(genReq.Params.AudioRefs) > 0
+	if hasGuidances && isSora2Model(genReq.Model) {
+		if len(genReq.Params.StartFrame) > 0 {
+			var frames []map[string]interface{}
+			for _, f := range genReq.Params.StartFrame {
+				fType := f.Type
+				if fType == "" {
+					fType = "UPLOADED"
+				}
+				frames = append(frames, map[string]interface{}{
+					"image": map[string]interface{}{
+						"id":   f.ID,
+						"type": fType,
+					},
+				})
+			}
+			params["guidances"] = map[string]interface{}{"start_frame": frames}
+			log.Printf("[Leonardo] Including start_frame in Sora 2 generation")
+		}
+	} else if hasGuidances {
+		guidances := map[string]interface{}{}
+
+		// Multi-image reference guidance
+		if len(genReq.Params.ImageRefs) > 0 {
+			var refs []map[string]interface{}
+			for _, ref := range genReq.Params.ImageRefs {
+				imgType := ref.Type
+				if imgType == "" {
+					imgType = "UPLOADED"
+				}
+				strength := ref.Strength
+				if strength == "" {
+					strength = "MID"
+				}
+				refs = append(refs, map[string]interface{}{
+					"image": map[string]interface{}{
+						"id":   ref.ID,
+						"type": imgType,
+					},
+					"strength": strength,
+				})
+			}
+			guidances["image_reference"] = refs
+			log.Printf("[Leonardo] Including %d image references in generation", len(refs))
+		}
+
+		// Start frame guidance
+		if len(genReq.Params.StartFrame) > 0 {
+			var frames []map[string]interface{}
+			for _, f := range genReq.Params.StartFrame {
+				fType := f.Type
+				if fType == "" {
+					fType = "UPLOADED"
+				}
+				frames = append(frames, map[string]interface{}{
+					"image": map[string]interface{}{
+						"id":   f.ID,
+						"type": fType,
+					},
+				})
+			}
+			guidances["start_frame"] = frames
+			log.Printf("[Leonardo] Including start_frame in generation")
+		}
+
+		// End frame guidance
+		if len(genReq.Params.EndFrame) > 0 {
+			var frames []map[string]interface{}
+			for _, f := range genReq.Params.EndFrame {
+				fType := f.Type
+				if fType == "" {
+					fType = "UPLOADED"
+				}
+				frames = append(frames, map[string]interface{}{
+					"image": map[string]interface{}{
+						"id":   f.ID,
+						"type": fType,
+					},
+				})
+			}
+			guidances["end_frame"] = frames
+			log.Printf("[Leonardo] Including end_frame in generation")
+		}
+
+		// Video reference guidance
+		if len(genReq.Params.VideoRefs) > 0 {
+			var refs []map[string]interface{}
+			for _, v := range genReq.Params.VideoRefs {
+				vType := v.Type
+				if vType == "" {
+					vType = "UPLOADED"
+				}
+				ref := map[string]interface{}{
+					"video": map[string]interface{}{
+						"id":   v.ID,
+						"type": vType,
+					},
+				}
+				if v.Duration > 0 {
+					ref["video"].(map[string]interface{})["duration"] = v.Duration
+				}
+				refs = append(refs, ref)
+			}
+			guidances["video_reference_base"] = refs
+			log.Printf("[Leonardo] Including video_reference_base in generation")
+		}
+
+		// Audio reference guidance
+		if len(genReq.Params.AudioRefs) > 0 {
+			var refs []map[string]interface{}
+			for _, a := range genReq.Params.AudioRefs {
+				aType := a.Type
+				if aType == "" {
+					aType = "UPLOADED"
+				}
+				ref := map[string]interface{}{
+					"audio": map[string]interface{}{
+						"id":   a.ID,
+						"type": aType,
+					},
+				}
+				if a.Duration > 0 {
+					ref["audio"].(map[string]interface{})["duration"] = a.Duration
+				}
+				refs = append(refs, ref)
+			}
+			guidances["audio_reference"] = refs
+			log.Printf("[Leonardo] Including audio_reference in generation")
+		}
+
+		params["guidances"] = guidances
+	}
+
+	requestModel := seedance480pUpstreamModel(genReq.Model)
+	gqlReq := graphqlRequest{
+		OperationName: "Generate",
+		Variables: map[string]interface{}{
+			"request": map[string]interface{}{
+				"model":      requestModel,
+				"public":     genReq.Public,
+				"parameters": params,
+			},
+		},
+		Query: generateMutation,
+	}
+
+	body, err := c.doGraphQL(jwt, gqlReq)
+	if err != nil {
+		return nil, err
+	}
+
+	var gqlResp struct {
+		Data struct {
+			Generate struct {
+				APICreditCost int    `json:"apiCreditCost"`
+				GenerationID  string `json:"generationId"`
+			} `json:"generate"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+
+	if err := json.Unmarshal(body, &gqlResp); err != nil {
+		return nil, fmt.Errorf("parse generate response: %w", err)
+	}
+
+	if len(gqlResp.Errors) > 0 {
+		return nil, fmt.Errorf("generate error: %s", gqlResp.Errors[0].Message)
+	}
+
+	log.Printf("[Leonardo] Generation submitted: id=%s, cost=%d tokens",
+		gqlResp.Data.Generate.GenerationID, gqlResp.Data.Generate.APICreditCost)
+
+	return &GenerateResponse{
+		GenerationID:  gqlResp.Data.Generate.GenerationID,
+		APICreditCost: gqlResp.Data.Generate.APICreditCost,
+	}, nil
+}
+
+// PollGenerationStatus checks the status of a generation.
+func (c *Client) PollGenerationStatus(session *TokenSession, generationID string) (*GenerationStatus, error) {
+	if err := c.EnsureValidJWT(session); err != nil {
+		return nil, fmt.Errorf("ensure JWT: %w", err)
+	}
+
+	session.mu.RLock()
+	jwt := session.JWT
+	session.mu.RUnlock()
+
+	gqlReq := graphqlRequest{
+		OperationName: "GetAIGenerationFeedStatuses",
+		Variables: map[string]interface{}{
+			"where": map[string]interface{}{
+				"id": map[string]interface{}{
+					"_in": []string{generationID},
+				},
+				"status": map[string]interface{}{
+					"_in": []string{"PENDING", "COMPLETE", "FAILED"},
+				},
+			},
+		},
+		Query: statusQuery,
+	}
+
+	body, err := c.doGraphQL(jwt, gqlReq)
+	if err != nil {
+		return nil, err
+	}
+
+	var gqlResp struct {
+		Data struct {
+			Generations []struct {
+				ID     string `json:"id"`
+				Status string `json:"status"`
+			} `json:"generations"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+
+	if err := json.Unmarshal(body, &gqlResp); err != nil {
+		return nil, fmt.Errorf("parse status response: %w", err)
+	}
+
+	if len(gqlResp.Errors) > 0 {
+		return nil, fmt.Errorf("status query error: %s", gqlResp.Errors[0].Message)
+	}
+
+	if len(gqlResp.Data.Generations) == 0 {
+		return &GenerationStatus{ID: generationID, Status: "UNKNOWN"}, nil
+	}
+
+	for _, gen := range gqlResp.Data.Generations {
+		if strings.EqualFold(strings.TrimSpace(gen.ID), strings.TrimSpace(generationID)) {
+			return &GenerationStatus{
+				ID:     gen.ID,
+				Status: gen.Status,
+			}, nil
+		}
+	}
+	return &GenerationStatus{ID: generationID, Status: "UNKNOWN"}, nil
+}
+
+// GetGenerationDetail fetches full details of a completed generation.
+func (c *Client) GetGenerationDetail(session *TokenSession, generationID string) (*GenerationDetail, error) {
+	if err := c.EnsureValidJWT(session); err != nil {
+		return nil, fmt.Errorf("ensure JWT: %w", err)
+	}
+
+	session.mu.RLock()
+	jwt := session.JWT
+	session.mu.RUnlock()
+
+	gqlReq := graphqlRequest{
+		OperationName: "GetGenerationDetail",
+		Variables: map[string]interface{}{
+			"where": map[string]interface{}{
+				"id": map[string]interface{}{
+					"_in": []string{generationID},
+				},
+			},
+		},
+		Query: generationDetailQuery,
+	}
+
+	body, err := c.doGraphQL(jwt, gqlReq)
+	if err != nil {
+		return nil, err
+	}
+
+	var gqlResp struct {
+		Data struct {
+			Generations []GenerationDetail `json:"generations"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+
+	if err := json.Unmarshal(body, &gqlResp); err != nil {
+		return nil, fmt.Errorf("parse detail response: %w", err)
+	}
+
+	if len(gqlResp.Errors) > 0 {
+		return nil, fmt.Errorf("detail query error: %s", gqlResp.Errors[0].Message)
+	}
+
+	if len(gqlResp.Data.Generations) == 0 {
+		return nil, fmt.Errorf("generation %s not found", generationID)
+	}
+
+	return &gqlResp.Data.Generations[0], nil
+}
+
+// GetGenerationFailureReason tries to fetch Leonardo's original failure reason for a failed generation.
+// Different upstream schemas expose this on different field names, so we probe a few known candidates
+// and gracefully fall back when a field is unavailable.
+func (c *Client) GetGenerationFailureReason(session *TokenSession, generationID string) (string, error) {
+	if err := c.EnsureValidJWT(session); err != nil {
+		return "", fmt.Errorf("ensure JWT: %w", err)
+	}
+
+	session.mu.RLock()
+	jwt := session.JWT
+	session.mu.RUnlock()
+
+	if reason, err := c.queryGenerationModerationFailureReason(jwt, generationID); err == nil && strings.TrimSpace(reason) != "" {
+		return strings.TrimSpace(reason), nil
+	} else if err != nil {
+		log.Printf("[Leonardo] generation moderation failure probe failed for %s: %v", generationID, err)
+	}
+
+	if reason, err := c.queryGenerationFailureReasonByIntrospection(jwt, generationID); err == nil && strings.TrimSpace(reason) != "" {
+		return strings.TrimSpace(reason), nil
+	} else if err != nil {
+		log.Printf("[Leonardo] generation failure introspection probe failed for %s: %v", generationID, err)
+	}
+
+	for _, fieldName := range generationFailureReasonFields {
+		reason, handled, err := c.queryGenerationFailureReasonField(jwt, generationID, fieldName)
+		if err != nil {
+			if isUnknownGraphQLFieldError(err, fieldName) {
+				continue
+			}
+			return "", err
+		}
+		if handled {
+			return strings.TrimSpace(reason), nil
+		}
+	}
+
+	return "", nil
+}
+
+func (c *Client) queryGenerationModerationFailureReason(jwt string, generationID string) (string, error) {
+	classifications, classErr := c.queryGenerationPromptModerationClassifications(jwt, generationID)
+	errorCodes, noteErr := c.queryGenerationNoteFailureCodes(jwt, generationID)
+
+	if len(errorCodes) == 0 && len(classifications) == 0 {
+		if classErr != nil {
+			return "", classErr
+		}
+		if noteErr != nil {
+			return "", noteErr
+		}
+		return "", nil
+	}
+	if len(errorCodes) > 0 && len(classifications) > 0 {
+		return fmt.Sprintf("%s: %s", strings.Join(errorCodes, ", "), strings.Join(classifications, ", ")), nil
+	}
+	if len(errorCodes) > 0 {
+		return strings.Join(errorCodes, ", "), nil
+	}
+	return fmt.Sprintf("PROVIDER_MODERATION_ERROR: %s", strings.Join(classifications, ", ")), nil
+}
+
+func (c *Client) queryGenerationPromptModerationClassifications(jwt string, generationID string) ([]string, error) {
+	gqlReq := graphqlRequest{
+		OperationName: "GetGenerationPromptModerations",
+		Variables: map[string]interface{}{
+			"where": map[string]interface{}{
+				"id": map[string]interface{}{
+					"_in": []string{generationID},
+				},
+			},
+		},
+		Query: `query GetGenerationPromptModerations($where: generations_bool_exp = {}) {
+  generations(where: $where) {
+    id
+    status
+    prompt_moderations {
+      moderationClassification
+      __typename
+    }
+    __typename
+  }
+}`,
+	}
+
+	body, err := c.doGraphQL(jwt, gqlReq)
+	if err != nil {
+		return nil, err
+	}
+
+	var gqlResp struct {
+		Data struct {
+			Generations []struct {
+				ID                string `json:"id"`
+				Status            string `json:"status"`
+				PromptModerations []struct {
+					ModerationClassification []string `json:"moderationClassification"`
+				} `json:"prompt_moderations"`
+			} `json:"generations"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(body, &gqlResp); err != nil {
+		return nil, fmt.Errorf("parse prompt moderation response: %w", err)
+	}
+	if len(gqlResp.Errors) > 0 {
+		return nil, fmt.Errorf("prompt moderation query error: %s", gqlResp.Errors[0].Message)
+	}
+
+	for _, gen := range gqlResp.Data.Generations {
+		if !strings.EqualFold(strings.TrimSpace(gen.ID), strings.TrimSpace(generationID)) {
+			continue
+		}
+
+		var classifications []string
+		for _, moderation := range gen.PromptModerations {
+			for _, classification := range moderation.ModerationClassification {
+				classification = strings.TrimSpace(classification)
+				if classification != "" {
+					classifications = appendUniqueString(classifications, classification)
+				}
+			}
+		}
+		return classifications, nil
+	}
+
+	return nil, nil
+}
+
+func (c *Client) queryGenerationNoteFailureCodes(jwt string, generationID string) ([]string, error) {
+	errorCodes, err := c.queryGenerationNoteFailureCodesObject(jwt, generationID)
+	if err == nil {
+		return errorCodes, nil
+	}
+	errorCodes, scalarErr := c.queryGenerationNoteFailureCodesScalar(jwt, generationID)
+	if scalarErr == nil {
+		return errorCodes, nil
+	}
+	return nil, err
+}
+
+func (c *Client) queryGenerationNoteFailureCodesObject(jwt string, generationID string) ([]string, error) {
+	gqlReq := graphqlRequest{
+		OperationName: "GetGenerationFailureNotes",
+		Variables: map[string]interface{}{
+			"where": map[string]interface{}{
+				"id": map[string]interface{}{
+					"_in": []string{generationID},
+				},
+			},
+		},
+		Query: `query GetGenerationFailureNotes($where: generations_bool_exp = {}) {
+  generations(where: $where) {
+    id
+    status
+    notes {
+      noteType
+      failureReason {
+        errorCode
+      }
+      __typename
+    }
+    __typename
+  }
+}`,
+	}
+
+	body, err := c.doGraphQL(jwt, gqlReq)
+	if err != nil {
+		return nil, err
+	}
+
+	var gqlResp struct {
+		Data struct {
+			Generations []struct {
+				ID    string `json:"id"`
+				Notes []struct {
+					NoteType      string `json:"noteType"`
+					FailureReason struct {
+						ErrorCode string `json:"errorCode"`
+					} `json:"failureReason"`
+				} `json:"notes"`
+			} `json:"generations"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(body, &gqlResp); err != nil {
+		return nil, fmt.Errorf("parse failure notes response: %w", err)
+	}
+	if len(gqlResp.Errors) > 0 {
+		return nil, fmt.Errorf("failure notes query error: %s", gqlResp.Errors[0].Message)
+	}
+	for _, gen := range gqlResp.Data.Generations {
+		if !strings.EqualFold(strings.TrimSpace(gen.ID), strings.TrimSpace(generationID)) {
+			continue
+		}
+		var errorCodes []string
+		for _, note := range gen.Notes {
+			if reason := strings.TrimSpace(note.FailureReason.ErrorCode); reason != "" {
+				errorCodes = appendUniqueString(errorCodes, reason)
+			}
+		}
+		return errorCodes, nil
+	}
+	return nil, nil
+}
+
+func (c *Client) queryGenerationNoteFailureCodesScalar(jwt string, generationID string) ([]string, error) {
+	gqlReq := graphqlRequest{
+		OperationName: "GetGenerationFailureNotesScalar",
+		Variables: map[string]interface{}{
+			"where": map[string]interface{}{
+				"id": map[string]interface{}{
+					"_in": []string{generationID},
+				},
+			},
+		},
+		Query: `query GetGenerationFailureNotesScalar($where: generations_bool_exp = {}) {
+  generations(where: $where) {
+    id
+    status
+    notes {
+      noteType
+      failureReason
+      __typename
+    }
+    __typename
+  }
+}`,
+	}
+
+	body, err := c.doGraphQL(jwt, gqlReq)
+	if err != nil {
+		return nil, err
+	}
+
+	var gqlResp struct {
+		Data struct {
+			Generations []struct {
+				ID    string `json:"id"`
+				Notes []struct {
+					NoteType      string      `json:"noteType"`
+					FailureReason interface{} `json:"failureReason"`
+				} `json:"notes"`
+			} `json:"generations"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(body, &gqlResp); err != nil {
+		return nil, fmt.Errorf("parse scalar failure notes response: %w", err)
+	}
+	if len(gqlResp.Errors) > 0 {
+		return nil, fmt.Errorf("scalar failure notes query error: %s", gqlResp.Errors[0].Message)
+	}
+	for _, gen := range gqlResp.Data.Generations {
+		if !strings.EqualFold(strings.TrimSpace(gen.ID), strings.TrimSpace(generationID)) {
+			continue
+		}
+		var errorCodes []string
+		for _, note := range gen.Notes {
+			if reason := extractMeaningfulFailureText(note.FailureReason); reason != "" {
+				errorCodes = appendUniqueString(errorCodes, reason)
+			}
+		}
+		return errorCodes, nil
+	}
+	return nil, nil
+}
+
+func (c *Client) queryGenerationFailureReasonByIntrospection(jwt string, generationID string) (string, error) {
+	fields, err := c.listGenerationFields(jwt)
+	if err != nil {
+		return "", err
+	}
+
+	candidates := make([]string, 0, len(fields))
+	seen := make(map[string]struct{}, len(fields))
+	for _, field := range generationFailureReasonFields {
+		if _, ok := fields[field]; ok && isGraphQLLeafType(fields[field]) {
+			candidates = append(candidates, field)
+			seen[field] = struct{}{}
+		}
+	}
+	for name, typeRef := range fields {
+		if _, ok := seen[name]; ok || !isGraphQLLeafType(typeRef) {
+			continue
+		}
+		lowerName := strings.ToLower(strings.TrimSpace(name))
+		for _, keyword := range generationFailureReasonKeywords {
+			if strings.Contains(lowerName, keyword) {
+				candidates = append(candidates, name)
+				seen[name] = struct{}{}
+				break
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return "", nil
+	}
+
+	selection := strings.Join(candidates, "\n    ")
+	gqlReq := graphqlRequest{
+		OperationName: "GetGenerationFailureDetails",
+		Variables: map[string]interface{}{
+			"where": map[string]interface{}{
+				"id": map[string]interface{}{
+					"_in": []string{generationID},
+				},
+			},
+		},
+		Query: fmt.Sprintf(`query GetGenerationFailureDetails($where: generations_bool_exp = {}) {
+  generations(where: $where) {
+    id
+    status
+    %s
+    __typename
+  }
+}`, selection),
+	}
+
+	body, err := c.doGraphQL(jwt, gqlReq)
+	if err != nil {
+		return "", err
+	}
+
+	var gqlResp struct {
+		Data struct {
+			Generations []map[string]interface{} `json:"generations"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(body, &gqlResp); err != nil {
+		return "", fmt.Errorf("parse failure details response: %w", err)
+	}
+	if len(gqlResp.Errors) > 0 {
+		return "", fmt.Errorf("failure details query error: %s", gqlResp.Errors[0].Message)
+	}
+	if len(gqlResp.Data.Generations) == 0 {
+		return "", nil
+	}
+
+	row := gqlResp.Data.Generations[0]
+	for _, fieldName := range candidates {
+		if reason := extractMeaningfulFailureText(row[fieldName]); reason != "" {
+			return reason, nil
+		}
+	}
+	return "", nil
+}
+
+func (c *Client) queryGenerationFailureReasonField(jwt string, generationID string, fieldName string) (string, bool, error) {
+	gqlReq := graphqlRequest{
+		OperationName: "GetGenerationFailureReason",
+		Variables: map[string]interface{}{
+			"where": map[string]interface{}{
+				"id": map[string]interface{}{
+					"_in": []string{generationID},
+				},
+			},
+		},
+		Query: fmt.Sprintf(`query GetGenerationFailureReason($where: generations_bool_exp = {}) {
+  generations(where: $where) {
+    id
+    status
+    %s
+    __typename
+  }
+}`, fieldName),
+	}
+
+	body, err := c.doGraphQL(jwt, gqlReq)
+	if err != nil {
+		return "", false, err
+	}
+
+	var gqlResp struct {
+		Data struct {
+			Generations []map[string]interface{} `json:"generations"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+
+	if err := json.Unmarshal(body, &gqlResp); err != nil {
+		return "", false, fmt.Errorf("parse failure reason response: %w", err)
+	}
+	if len(gqlResp.Errors) > 0 {
+		return "", false, fmt.Errorf("failure reason query error: %s", gqlResp.Errors[0].Message)
+	}
+	if len(gqlResp.Data.Generations) == 0 {
+		return "", false, nil
+	}
+
+	value, ok := gqlResp.Data.Generations[0][fieldName]
+	if !ok {
+		return "", false, nil
+	}
+	switch v := value.(type) {
+	case string:
+		return v, true, nil
+	case nil:
+		return "", true, nil
+	default:
+		return fmt.Sprint(v), true, nil
+	}
+}
+
+func isUnknownGraphQLFieldError(err error, fieldName string) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	fieldName = strings.ToLower(strings.TrimSpace(fieldName))
+	if fieldName == "" {
+		return false
+	}
+	return strings.Contains(msg, "cannot query field") && strings.Contains(msg, strings.ToLower(fieldName))
+}
+
+func (c *Client) listGenerationFields(jwt string) (map[string]*graphqlTypeRef, error) {
+	gqlReq := graphqlRequest{
+		OperationName: "IntrospectGenerationType",
+		Query: `query IntrospectGenerationType {
+  __type(name: "generations") {
+    fields {
+      name
+      type {
+        kind
+        name
+        ofType {
+          kind
+          name
+          ofType {
+            kind
+            name
+            ofType {
+              kind
+              name
+            }
+          }
+        }
+      }
+    }
+  }
+}`,
+	}
+
+	body, err := c.doGraphQL(jwt, gqlReq)
+	if err != nil {
+		return nil, err
+	}
+
+	var gqlResp struct {
+		Data struct {
+			Type struct {
+				Fields []struct {
+					Name string          `json:"name"`
+					Type *graphqlTypeRef `json:"type"`
+				} `json:"fields"`
+			} `json:"__type"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+
+	if err := json.Unmarshal(body, &gqlResp); err != nil {
+		return nil, fmt.Errorf("parse generation introspection response: %w", err)
+	}
+	if len(gqlResp.Errors) > 0 {
+		return nil, fmt.Errorf("generation introspection query error: %s", gqlResp.Errors[0].Message)
+	}
+
+	fields := make(map[string]*graphqlTypeRef, len(gqlResp.Data.Type.Fields))
+	for _, field := range gqlResp.Data.Type.Fields {
+		name := strings.TrimSpace(field.Name)
+		if name == "" {
+			continue
+		}
+		fields[name] = field.Type
+	}
+	return fields, nil
+}
+
+type graphqlTypeRef struct {
+	Kind   string          `json:"kind"`
+	Name   string          `json:"name"`
+	OfType *graphqlTypeRef `json:"ofType"`
+}
+
+func isGraphQLLeafType(typeRef *graphqlTypeRef) bool {
+	if typeRef == nil {
+		return false
+	}
+	switch strings.ToUpper(strings.TrimSpace(typeRef.Kind)) {
+	case "SCALAR", "ENUM":
+		return true
+	case "NON_NULL", "LIST":
+		return isGraphQLLeafType(typeRef.OfType)
+	default:
+		return false
+	}
+}
+
+func extractMeaningfulFailureText(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		text := strings.TrimSpace(v)
+		if text == "" {
+			return ""
+		}
+		lower := strings.ToLower(text)
+		if lower == "failed" || lower == "complete" || lower == "pending" || lower == "unknown" {
+			return ""
+		}
+		return text
+	case []interface{}:
+		for _, item := range v {
+			if found := extractMeaningfulFailureText(item); found != "" {
+				return found
+			}
+		}
+	case map[string]interface{}:
+		preferredKeys := []string{
+			"message",
+			"error",
+			"reason",
+			"statusReason",
+			"failureReason",
+			"statusMessage",
+			"moderationMessage",
+			"moderationReason",
+			"detail",
+			"description",
+		}
+		for _, key := range preferredKeys {
+			if found := extractMeaningfulFailureText(v[key]); found != "" {
+				return found
+			}
+		}
+		for _, item := range v {
+			if found := extractMeaningfulFailureText(item); found != "" {
+				return found
+			}
+		}
+	}
+	return ""
+}
+
+func appendUniqueString(items []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return items
+	}
+	for _, item := range items {
+		if strings.EqualFold(strings.TrimSpace(item), value) {
+			return items
+		}
+	}
+	return append(items, value)
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// ──────────────────────────────────────────────────────────
+// Image Upload for Guidance (multi-image reference)
+// ──────────────────────────────────────────────────────────
+
+const uploadImageMutation = `mutation UploadImage($uploadImageInput: UploadImageInput!) {
+  uploadImage(arg1: $uploadImageInput) {
+    uploadId
+    url
+    fields
+    __typename
+  }
+}`
+
+const initImageModerationQuery = `query GetInitImageModeration($akUUID: uuid!) {
+  init_image_moderation(where: {akUUID: {_eq: $akUUID}}) {
+    akUUID
+    initImageId
+    checkStatus
+    __typename
+  }
+}`
+
+const uploadedMediaByIDQuery = `query GetUploadedMediaById($uploadId: uuid!) {
+  uploaded_media(where: {id: {_eq: $uploadId}}, limit: 1) {
+    duration
+    fileSize
+    height
+    id
+    status
+    statusReason
+    thumbnailUrl
+    url
+    video_fps
+    videoCodec
+    width
+    __typename
+  }
+}`
+
+// UploadInitResult holds the response from the upload init mutation.
+type UploadInitResult struct {
+	UploadID string `json:"uploadId"`
+	Fields   string `json:"fields"`
+	URL      string `json:"url"`
+}
+
+type InitImageModeration struct {
+	AKUUID      string `json:"akUUID"`
+	InitImageID string `json:"initImageId"`
+	CheckStatus string `json:"checkStatus"`
+}
+
+type UploadedMedia struct {
+	ID           string   `json:"id"`
+	Status       string   `json:"status"`
+	StatusReason *string  `json:"statusReason"`
+	URL          string   `json:"url"`
+	ThumbnailURL *string  `json:"thumbnailUrl"`
+	Duration     *float64 `json:"duration"`
+	FileSize     *int64   `json:"fileSize"`
+	Height       *int     `json:"height"`
+	Width        *int     `json:"width"`
+	VideoFPS     *float64 `json:"video_fps"`
+	VideoCodec   *string  `json:"videoCodec"`
+}
+
+// UploadInitImage initializes an image upload slot on Leonardo.
+// Returns the upload details including S3 presigned URL and fields.
+func (c *Client) UploadInitImage(session *TokenSession, ext string) (*UploadInitResult, error) {
+	return c.UploadInitMedia(session, ext, "")
+}
+
+// UploadInitMedia initializes a Leonardo staged upload slot.
+func (c *Client) UploadInitMedia(session *TokenSession, ext string, originalFilename string) (*UploadInitResult, error) {
+	if err := c.EnsureValidJWT(session); err != nil {
+		return nil, fmt.Errorf("ensure JWT: %w", err)
+	}
+
+	session.mu.RLock()
+	jwt := session.JWT
+	session.mu.RUnlock()
+
+	if ext == "" {
+		ext = "jpg"
+	}
+	uploadInput := map[string]interface{}{
+		"uploadType": "INIT",
+		"extension":  ext,
+	}
+	if strings.TrimSpace(originalFilename) != "" {
+		uploadInput["originalFilename"] = strings.TrimSpace(originalFilename)
+	}
+
+	gqlReq := graphqlRequest{
+		OperationName: "UploadImage",
+		Variables: map[string]interface{}{
+			"uploadImageInput": uploadInput,
+		},
+		Query: uploadImageMutation,
+	}
+
+	for attempt := 1; attempt <= uploadInitMaxAttempts; attempt++ {
+		body, err := c.doGraphQLWithClient(c.uploadInitHTTPClient, jwt, gqlReq)
+		if err != nil {
+			if attempt < uploadInitMaxAttempts && isRetryableGraphQLError(err) {
+				log.Printf("[Leonardo] Upload init attempt %d/%d failed: %v; retrying", attempt, uploadInitMaxAttempts, err)
+				time.Sleep(uploadInitRetryDelay)
+				continue
+			}
+			return nil, err
+		}
+
+		var gqlResp struct {
+			Data struct {
+				UploadImage UploadInitResult `json:"uploadImage"`
+			} `json:"data"`
+			Errors []struct {
+				Message string `json:"message"`
+			} `json:"errors"`
+		}
+
+		if err := json.Unmarshal(body, &gqlResp); err != nil {
+			return nil, fmt.Errorf("parse upload init response: %w", err)
+		}
+
+		if len(gqlResp.Errors) > 0 {
+			return nil, fmt.Errorf("upload init error: %s", gqlResp.Errors[0].Message)
+		}
+
+		result := &gqlResp.Data.UploadImage
+		log.Printf("[Leonardo] Upload init: uploadId=%s, url=%s", result.UploadID, result.URL)
+		return result, nil
+	}
+
+	return nil, fmt.Errorf("upload init failed after %d attempts", uploadInitMaxAttempts)
+}
+
+// WaitForInitImage polls Leonardo moderation status until the uploaded image
+// becomes available as a usable init image ID.
+func (c *Client) WaitForInitImage(session *TokenSession, uploadID string, timeout time.Duration) (string, error) {
+	if strings.TrimSpace(uploadID) == "" {
+		return "", fmt.Errorf("upload id is required")
+	}
+	if timeout <= 0 {
+		timeout = defaultInitWait
+	}
+	if err := c.EnsureValidJWT(session); err != nil {
+		return "", fmt.Errorf("ensure JWT: %w", err)
+	}
+
+	deadline := time.Now().Add(timeout)
+	pollInterval := 1500 * time.Millisecond
+	lastStatus := ""
+
+	for time.Now().Before(deadline) {
+		session.mu.RLock()
+		jwt := session.JWT
+		session.mu.RUnlock()
+
+		gqlReq := graphqlRequest{
+			OperationName: "GetInitImageModeration",
+			Variables: map[string]interface{}{
+				"akUUID": uploadID,
+			},
+			Query: initImageModerationQuery,
+		}
+
+		body, err := c.doGraphQL(jwt, gqlReq)
+		if err != nil {
+			if isRetryableGraphQLError(err) {
+				log.Printf("[Leonardo] Transient init image polling error for uploadID=%s: %v; retrying", uploadID, err)
+				time.Sleep(pollInterval)
+				continue
+			}
+			return "", err
+		}
+
+		var gqlResp struct {
+			Data struct {
+				InitImageModeration []InitImageModeration `json:"init_image_moderation"`
+			} `json:"data"`
+			Errors []struct {
+				Message string `json:"message"`
+			} `json:"errors"`
+		}
+
+		if err := json.Unmarshal(body, &gqlResp); err != nil {
+			return "", fmt.Errorf("parse init image moderation response: %w", err)
+		}
+
+		if len(gqlResp.Errors) > 0 {
+			return "", fmt.Errorf("init image moderation error: %s", gqlResp.Errors[0].Message)
+		}
+
+		if len(gqlResp.Data.InitImageModeration) > 0 {
+			item := gqlResp.Data.InitImageModeration[0]
+			lastStatus = strings.ToUpper(strings.TrimSpace(item.CheckStatus))
+			if strings.TrimSpace(item.InitImageID) != "" {
+				return item.InitImageID, nil
+			}
+			switch lastStatus {
+			case "FAILED", "REJECTED", "BLOCKED", "ERROR":
+				return "", fmt.Errorf("init image moderation %s", strings.ToLower(lastStatus))
+			}
+		}
+
+		time.Sleep(pollInterval)
+	}
+
+	if lastStatus != "" {
+		return "", fmt.Errorf("timed out waiting for init image id (last status: %s)", lastStatus)
+	}
+	return "", fmt.Errorf("timed out waiting for init image moderation")
+}
+
+// WaitForUploadedMedia polls the uploaded_media table until the staged upload
+// becomes a usable video asset with COMPLETE status.
+func (c *Client) WaitForUploadedMedia(session *TokenSession, uploadID string, timeout time.Duration) (*UploadedMedia, error) {
+	if strings.TrimSpace(uploadID) == "" {
+		return nil, fmt.Errorf("upload id is required")
+	}
+	if timeout <= 0 {
+		timeout = defaultInitWait
+	}
+	if err := c.EnsureValidJWT(session); err != nil {
+		return nil, fmt.Errorf("ensure JWT: %w", err)
+	}
+
+	deadline := time.Now().Add(timeout)
+	pollInterval := 1500 * time.Millisecond
+	lastStatus := ""
+	lastReason := ""
+
+	for time.Now().Before(deadline) {
+		session.mu.RLock()
+		jwt := session.JWT
+		session.mu.RUnlock()
+
+		gqlReq := graphqlRequest{
+			OperationName: "GetUploadedMediaById",
+			Variables: map[string]interface{}{
+				"uploadId": uploadID,
+			},
+			Query: uploadedMediaByIDQuery,
+		}
+
+		body, err := c.doGraphQL(jwt, gqlReq)
+		if err != nil {
+			if isRetryableGraphQLError(err) {
+				log.Printf("[Leonardo] Transient uploaded_media polling error for uploadID=%s: %v; retrying", uploadID, err)
+				time.Sleep(pollInterval)
+				continue
+			}
+			return nil, err
+		}
+
+		var gqlResp struct {
+			Data struct {
+				UploadedMedia []UploadedMedia `json:"uploaded_media"`
+			} `json:"data"`
+			Errors []struct {
+				Message string `json:"message"`
+			} `json:"errors"`
+		}
+
+		if err := json.Unmarshal(body, &gqlResp); err != nil {
+			return nil, fmt.Errorf("parse uploaded media response: %w", err)
+		}
+		if len(gqlResp.Errors) > 0 {
+			return nil, fmt.Errorf("uploaded media query error: %s", gqlResp.Errors[0].Message)
+		}
+
+		if len(gqlResp.Data.UploadedMedia) > 0 {
+			item := gqlResp.Data.UploadedMedia[0]
+			lastStatus = strings.ToUpper(strings.TrimSpace(item.Status))
+			if item.StatusReason != nil {
+				lastReason = strings.TrimSpace(*item.StatusReason)
+			}
+			switch lastStatus {
+			case "COMPLETE", "COMPLETED", "READY":
+				return &item, nil
+			case "FAILED", "REJECTED", "BLOCKED", "ERROR":
+				if lastReason != "" {
+					return nil, fmt.Errorf("uploaded media %s: %s", strings.ToLower(lastStatus), lastReason)
+				}
+				return nil, fmt.Errorf("uploaded media %s", strings.ToLower(lastStatus))
+			}
+		}
+
+		time.Sleep(pollInterval)
+	}
+
+	if lastStatus != "" {
+		if lastReason != "" {
+			return nil, fmt.Errorf("timed out waiting for uploaded media completion (last status: %s, reason: %s)", lastStatus, lastReason)
+		}
+		return nil, fmt.Errorf("timed out waiting for uploaded media completion (last status: %s)", lastStatus)
+	}
+	return nil, fmt.Errorf("timed out waiting for uploaded media")
+}
+
+func parseUploadFields(fieldsJSON string) (map[string]string, error) {
+	var fields map[string]string
+	if err := json.Unmarshal([]byte(fieldsJSON), &fields); err != nil {
+		return nil, fmt.Errorf("parse upload fields: %w", err)
+	}
+
+	if len(fields) == 0 {
+		return nil, fmt.Errorf("upload fields were empty")
+	}
+
+	return fields, nil
+}
+
+func inferUploadFilename(contentType string) string {
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "image/png":
+		return "upload.png"
+	case "image/webp":
+		return "upload.webp"
+	case "image/gif":
+		return "upload.gif"
+	case "image/bmp":
+		return "upload.bmp"
+	case "image/tiff":
+		return "upload.tiff"
+	case "video/mp4":
+		return "upload.mp4"
+	case "video/quicktime":
+		return "upload.mov"
+	case "video/webm":
+		return "upload.webm"
+	case "video/x-msvideo":
+		return "upload.avi"
+	case "video/x-matroska":
+		return "upload.mkv"
+	default:
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "video/") {
+			return "upload.mp4"
+		}
+		return "upload.jpg"
+	}
+}
+
+func buildS3UploadBody(fields map[string]string, imageData []byte, contentType string) ([]byte, string) {
+	boundary := "----LeoUpload" + fmt.Sprintf("%d", time.Now().UnixNano())
+	var body bytes.Buffer
+
+	for k, v := range fields {
+		body.WriteString("--" + boundary + "\r\n")
+		body.WriteString(fmt.Sprintf("Content-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n", k, v))
+	}
+
+	body.WriteString("--" + boundary + "\r\n")
+	if contentType == "" {
+		contentType = "image/jpeg"
+	}
+	body.WriteString(fmt.Sprintf("Content-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n", inferUploadFilename(contentType)))
+	body.WriteString(fmt.Sprintf("Content-Type: %s\r\n\r\n", contentType))
+	body.Write(imageData)
+	body.WriteString("\r\n--" + boundary + "--\r\n")
+
+	return body.Bytes(), boundary
+}
+
+func isRetryableUploadError(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "connection reset by peer"),
+		strings.Contains(msg, "broken pipe"),
+		strings.Contains(msg, "timeout"),
+		strings.Contains(msg, "temporary failure"),
+		strings.Contains(msg, "temporarily unavailable"),
+		strings.Contains(msg, "unexpected eof"),
+		strings.Contains(msg, "eof"):
+		return true
+	default:
+		return false
+	}
+}
+
+func isRetryableUploadStatus(statusCode int) bool {
+	switch statusCode {
+	case http.StatusRequestTimeout, http.StatusTooManyRequests:
+		return true
+	default:
+		return statusCode >= 500
+	}
+}
+
+// UploadImageToS3 uploads the actual image data to the S3 presigned URL.
+// fieldsJSON is the JSON string returned by uploadImage, containing S3 form fields.
+func (c *Client) UploadImageToS3(uploadURL string, fieldsJSON string, imageData []byte, contentType string) error {
+	fields, err := parseUploadFields(fieldsJSON)
+	if err != nil {
+		return err
+	}
+
+	body, boundary := buildS3UploadBody(fields, imageData, contentType)
+
+	for attempt := 1; attempt <= s3UploadMaxAttempts; attempt++ {
+		req, err := http.NewRequest("POST", uploadURL, bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		req.Close = true
+		req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
+
+		client := c.httpClient
+		if c.uploadHTTPClient != nil {
+			client = c.uploadHTTPClient
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			if attempt < s3UploadMaxAttempts && isRetryableUploadError(err) {
+				log.Printf("[Leonardo] S3 upload attempt %d/%d failed: %v; retrying", attempt, s3UploadMaxAttempts, err)
+				time.Sleep(time.Duration(attempt) * s3UploadRetryDelay)
+				continue
+			}
+			return fmt.Errorf("s3 upload failed after %d attempt(s): %w", attempt, err)
+		}
+
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode < 300 {
+			if attempt > 1 {
+				log.Printf("[Leonardo] Image uploaded to S3 successfully on attempt %d/%d", attempt, s3UploadMaxAttempts)
+			} else {
+				log.Printf("[Leonardo] Image uploaded to S3 successfully")
+			}
+			return nil
+		}
+
+		snippet := string(respBody[:min(len(respBody), 300)])
+		statusErr := fmt.Errorf("s3 upload returned %d: %s", resp.StatusCode, snippet)
+		if attempt < s3UploadMaxAttempts && isRetryableUploadStatus(resp.StatusCode) {
+			log.Printf("[Leonardo] S3 upload attempt %d/%d returned retryable status %d; retrying", attempt, s3UploadMaxAttempts, resp.StatusCode)
+			time.Sleep(time.Duration(attempt) * s3UploadRetryDelay)
+			continue
+		}
+		return statusErr
+	}
+
+	return fmt.Errorf("s3 upload failed after %d attempt(s)", s3UploadMaxAttempts)
+}
