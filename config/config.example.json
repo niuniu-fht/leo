@@ -72,6 +72,7 @@
     "provider_moderation_error",
     "provider_output_error"
   ],
+  "token_exhaustion_credit_threshold": 10,
   "token_max_running_tasks": 2,
   "token_rotation_strategy": "round_robin",
   "token_success_auto_disable_enabled": false,

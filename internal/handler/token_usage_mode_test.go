@@ -20,8 +20,27 @@ func TestTokenMaxRunningTasksDefaultsToTwo(t *testing.T) {
 	if got := srv.tokenMaxRunningTasks(); got != defaultTokenMaxRunningTasks {
 		t.Fatalf("tokenMaxRunningTasks() = %d, want %d", got, defaultTokenMaxRunningTasks)
 	}
-	if got := srv.tokenExhaustionCreditThreshold(); got != float64(videoKo3ExhaustionCredits) {
-		t.Fatalf("tokenExhaustionCreditThreshold() = %.0f, want %.0f", got, float64(videoKo3ExhaustionCredits))
+	if got := srv.tokenExhaustionCreditThreshold(); got != float64(defaultTokenExhaustionCreditThreshold) {
+		t.Fatalf("tokenExhaustionCreditThreshold() = %.0f, want %.0f", got, float64(defaultTokenExhaustionCreditThreshold))
+	}
+}
+
+func TestTokenExhaustionCreditThresholdUsesConfiguredValue(t *testing.T) {
+	cfg := config.Global()
+	original := cfg.GetAll()
+	cfg.SetAll(map[string]interface{}{"token_exhaustion_credit_threshold": 25})
+	t.Cleanup(func() {
+		cfg.SetAll(original)
+	})
+
+	srv := &Server{Config: cfg}
+	if got := srv.tokenExhaustionCreditThreshold(); got != 25 {
+		t.Fatalf("tokenExhaustionCreditThreshold() = %.0f, want 25", got)
+	}
+
+	cfg.Set("token_exhaustion_credit_threshold", -5)
+	if got := srv.tokenExhaustionCreditThreshold(); got != 0 {
+		t.Fatalf("negative tokenExhaustionCreditThreshold() = %.0f, want 0", got)
 	}
 }
 
@@ -96,6 +115,7 @@ func TestTokenCanRunLowerCostSeedanceModelsByCredits(t *testing.T) {
 		t.Fatalf("update credits: %v", err)
 	}
 
+	cfg.Set("token_exhaustion_credit_threshold", videoKo3ExhaustionCredits)
 	srv := &Server{Config: cfg, TokenMgr: mgr}
 	if !srv.tokenCanRunModelByCredits(mgr.GetByID(tokenID), "video-2.0-mini-480p", false) {
 		t.Fatalf("expected 1300-credit token to run mini 480p")
@@ -132,7 +152,9 @@ func TestFailedGenerationRefundRestoresExhaustedToken(t *testing.T) {
 		t.Fatalf("update credits: %v", err)
 	}
 
-	srv := &Server{TokenMgr: mgr}
+	cfg := config.New()
+	cfg.Set("token_exhaustion_credit_threshold", videoKo3ExhaustionCredits)
+	srv := &Server{Config: cfg, TokenMgr: mgr}
 	srv.applyTokenCreditCost(tokenID, 3400)
 	if status := toString(mgr.GetByID(tokenID)["status"]); status != "exhausted" {
 		t.Fatalf("status after local deduction = %q, want exhausted", status)
@@ -162,7 +184,9 @@ func TestFailedGenerationRefundKeepsActuallyExhaustedToken(t *testing.T) {
 		t.Fatalf("set exhausted status: %v", err)
 	}
 
-	srv := &Server{TokenMgr: mgr}
+	cfg := config.New()
+	cfg.Set("token_exhaustion_credit_threshold", videoKo3ExhaustionCredits)
+	srv := &Server{Config: cfg, TokenMgr: mgr}
 	srv.applyFailedGenerationCredits(tokenID, 900, 7200, "generation-still-exhausted")
 	updated := mgr.GetByID(tokenID)
 	if status := toString(updated["status"]); status != "exhausted" {

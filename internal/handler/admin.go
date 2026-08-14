@@ -1004,6 +1004,7 @@ func (s *Server) HandleAdminConfig(w http.ResponseWriter, r *http.Request) {
 		all["leonardo_upload_proxy"] = strings.TrimSpace(toString(all["leonardo_upload_proxy"]))
 		all["auto_refresh_max_concurrency"] = normalizeConfigInt(all["auto_refresh_max_concurrency"], 5, 1, 50)
 		all["token_max_running_tasks"] = normalizeConfigInt(all["token_max_running_tasks"], defaultTokenMaxRunningTasks, 1, 10)
+		all["token_exhaustion_credit_threshold"] = normalizeConfigInt(all["token_exhaustion_credit_threshold"], defaultTokenExhaustionCreditThreshold, 0, 1000000)
 		all["exhausted_token_auto_cleanup_enabled"] = toBool(all["exhausted_token_auto_cleanup_enabled"])
 		all["exhausted_token_auto_cleanup_interval_hours"] = normalizeConfigInt(all["exhausted_token_auto_cleanup_interval_hours"], 24, 1, 8760)
 		all["request_log_retention_limit"] = normalizeConfigInt(all["request_log_retention_limit"], 5000, 100, 100000)
@@ -1045,6 +1046,7 @@ func (s *Server) HandleAdminConfig(w http.ResponseWriter, r *http.Request) {
 	updates["leonardo_upload_proxy_mode"] = normalizeLeonardoUploadProxyMode(toString(updates["leonardo_upload_proxy_mode"]))
 	updates["auto_refresh_max_concurrency"] = normalizeConfigInt(updates["auto_refresh_max_concurrency"], 5, 1, 50)
 	updates["token_max_running_tasks"] = normalizeConfigInt(updates["token_max_running_tasks"], defaultTokenMaxRunningTasks, 1, 10)
+	updates["token_exhaustion_credit_threshold"] = normalizeConfigInt(updates["token_exhaustion_credit_threshold"], defaultTokenExhaustionCreditThreshold, 0, 1000000)
 	delete(updates, "sora2_dedicated_mode_enabled")
 	updates["exhausted_token_auto_cleanup_enabled"] = toBool(updates["exhausted_token_auto_cleanup_enabled"])
 	updates["exhausted_token_auto_cleanup_interval_hours"] = normalizeConfigInt(updates["exhausted_token_auto_cleanup_interval_hours"], 24, 1, 8760)
@@ -4681,7 +4683,14 @@ func (s *Server) markTokenExhaustedIfBelowGenerationMinimum(tokenID string, cred
 }
 
 func (s *Server) tokenExhaustionCreditThreshold() float64 {
-	return float64(videoKo3ExhaustionCredits)
+	if s != nil && s.Config != nil {
+		value := s.Config.GetInt("token_exhaustion_credit_threshold", defaultTokenExhaustionCreditThreshold)
+		if value < 0 {
+			value = 0
+		}
+		return float64(value)
+	}
+	return float64(defaultTokenExhaustionCreditThreshold)
 }
 
 func (s *Server) tokenCanRunModelByCredits(info map[string]interface{}, modelID string, videoReferenceMode bool) bool {

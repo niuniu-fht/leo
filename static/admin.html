@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Leo2API 控制台</title>
   <link rel="stylesheet" href="/static/vendor/tabler/tabler.min.css" />
-  <link rel="stylesheet" href="/static/admin.css?v=20260815-3" />
+  <link rel="stylesheet" href="/static/admin.css?v=20260815-4" />
 </head>
 <body class="d-flex flex-column min-vh-100">
   <header class="navbar navbar-expand-md navbar-dark d-print-none leo-navbar">
@@ -419,7 +419,13 @@
                 <div class="form-group mb-3">
                   <label class="form-label" for="confTokenMaxRunningTasks">单 Token 最大并发任务数</label>
                   <input type="number" id="confTokenMaxRunningTasks" class="form-control input-text" min="1" max="10" step="1" placeholder="默认 2" />
-                  <p class="help text-secondary small mt-1">控制每个 token 同时运行中的生成任务数量，范围 1-10。积分不足当前模型所需积分时会自动跳过该 token；低于 1200 积分才标记为额度耗尽。</p>
+                  <p class="help text-secondary small mt-1">控制每个 token 同时运行中的生成任务数量，范围 1-10。积分不足当前模型所需积分时会自动跳过该 token。</p>
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confTokenExhaustionCreditThreshold">额度耗尽阈值</label>
+                  <input type="number" id="confTokenExhaustionCreditThreshold" class="form-control input-text" min="0" max="1000000" step="1" placeholder="默认 10" />
+                  <p class="help text-secondary small mt-1">当账号积分低于该数值时，Token 标记为“额度耗尽”并关闭自动刷新。默认 10，适合生图请求。</p>
                 </div>
 
                 <div class="form-group mb-3">
@@ -719,6 +725,6 @@
   <div id="appToast" class="toast leo-toast" role="status" aria-live="polite"></div>
 
   <script src="/static/vendor/tabler/tabler.min.js"></script>
-  <script src="/static/admin.js?v=20260815-3"></script>
+  <script src="/static/admin.js?v=20260815-4"></script>
 </body>
 </html>

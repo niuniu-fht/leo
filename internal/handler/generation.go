@@ -241,27 +241,28 @@ var openAIModelCatalog = []map[string]interface{}{
 }
 
 const (
-	defaultSeedanceVideoDuration    = 10
-	defaultSora2VideoDuration       = 8
-	defaultKlingO3VideoDuration     = 3
-	defaultKlingO3VideoRefDuration  = 5
-	defaultMinimaxH3VideoDuration   = 5
-	tokenPreparationLeaseTTL        = 5 * time.Minute
-	generationJWTPreferredRemaining = 10 * time.Minute
-	generationJWTMinimumRemaining   = 5 * time.Minute
-	sora2RequiredCredits            = 1200
-	video2RequiredCredits           = 4550
-	video2FastRequiredCredits       = 3650
-	video2MiniRequiredCredits       = 2400
-	video2Required480pCredits       = 2150
-	video2FastRequired480pCredits   = 1700
-	video2MiniRequired480pCredits   = 1200
-	klingO3RequiredCredits          = 4200
-	klingO3VideoRefRequiredCredits  = 3400
-	minimaxH3RequiredCredits        = 2100
-	defaultTokenMaxRunningTasks     = 2
-	videoKo3ExhaustionCredits       = video2MiniRequired480pCredits
-	failedGenerationCreditsDelay    = 5 * time.Second
+	defaultSeedanceVideoDuration          = 10
+	defaultSora2VideoDuration             = 8
+	defaultKlingO3VideoDuration           = 3
+	defaultKlingO3VideoRefDuration        = 5
+	defaultMinimaxH3VideoDuration         = 5
+	tokenPreparationLeaseTTL              = 5 * time.Minute
+	generationJWTPreferredRemaining       = 10 * time.Minute
+	generationJWTMinimumRemaining         = 5 * time.Minute
+	sora2RequiredCredits                  = 1200
+	video2RequiredCredits                 = 4550
+	video2FastRequiredCredits             = 3650
+	video2MiniRequiredCredits             = 2400
+	video2Required480pCredits             = 2150
+	video2FastRequired480pCredits         = 1700
+	video2MiniRequired480pCredits         = 1200
+	klingO3RequiredCredits                = 4200
+	klingO3VideoRefRequiredCredits        = 3400
+	minimaxH3RequiredCredits              = 2100
+	defaultTokenMaxRunningTasks           = 2
+	defaultTokenExhaustionCreditThreshold = 10
+	videoKo3ExhaustionCredits             = video2MiniRequired480pCredits
+	failedGenerationCreditsDelay          = 5 * time.Second
 )
 
 // Server holds all dependencies for HTTP handlers.
