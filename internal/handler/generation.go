@@ -1288,7 +1288,8 @@ func (s *Server) resolveImageRequestSizeDetails(publicModelID string, size strin
 	}
 
 	originalWidth, originalHeight, originalLabel, originalErr := resolveOpenAIImageSize(size, aspectRatio)
-	finalWidth, finalHeight, finalLabel, err := resolveOpenAIImageSize1K(size, aspectRatio)
+	scale := imageSizeModeScale(mode)
+	finalWidth, finalHeight, finalLabel, err := resolveOpenAIImageSizeScaled(size, aspectRatio, scale)
 	if err != nil {
 		return imageSizeResolution{}, err
 	}
@@ -1303,7 +1304,7 @@ func (s *Server) resolveImageRequestSizeDetails(publicModelID string, size strin
 		Width:         finalWidth,
 		Height:        finalHeight,
 		Label:         finalLabel,
-		Mode:          "1k",
+		Mode:          normalizeImageSizeScaleMode(mode),
 		OriginalLabel: originalLabel,
 		FinalLabel:    finalLabel,
 		Transform:     transform,
@@ -1333,12 +1334,28 @@ func isGPTImagePublicModel(publicModelID string) bool {
 }
 
 func isGPTImage1KSizeMode(mode string) bool {
+	return imageSizeModeScale(mode) > 0
+}
+
+func imageSizeModeScale(mode string) int {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "1k", "1024", "1024x1024", "scale_1k", "scale-1k":
-		return true
+		return 1
+	case "2k", "2048", "2048x2048", "scale_2k", "scale-2k":
+		return 2
+	case "4k", "4096", "4096x4096", "scale_4k", "scale-4k":
+		return 4
 	default:
-		return false
+		return 0
 	}
+}
+
+func normalizeImageSizeScaleMode(mode string) string {
+	scale := imageSizeModeScale(mode)
+	if scale <= 0 {
+		return "request"
+	}
+	return fmt.Sprintf("%dk", scale)
 }
 
 func rawImageSizeInputLabel(size string, aspectRatio string) string {
@@ -1400,22 +1417,22 @@ func gcdInt(a int, b int) int {
 	return a
 }
 
-func resolveOpenAIImageSize1K(size string, aspectRatio string) (int, int, string, error) {
+func resolveOpenAIImageSizeScaled(size string, aspectRatio string, scale int) (int, int, string, error) {
 	if width, height, ok := parseOpenAIImageSizePair(size); ok {
-		return nearestGPTImage1KSize(float64(width) / float64(height))
+		return nearestGPTImageScaledSize(float64(width)/float64(height), scale)
 	}
 	if ratio, ok := parseOpenAIAspectRatio(size); ok {
-		return nearestGPTImage1KSize(ratio)
+		return nearestGPTImageScaledSize(ratio, scale)
 	}
 	if strings.TrimSpace(size) == "" {
 		if ratio, ok := parseOpenAIAspectRatio(aspectRatio); ok {
-			return nearestGPTImage1KSize(ratio)
+			return nearestGPTImageScaledSize(ratio, scale)
 		}
 		if width, height, _, err := resolveOpenAIImageSize("", aspectRatio); err == nil && width > 0 && height > 0 {
-			return nearestGPTImage1KSize(float64(width) / float64(height))
+			return nearestGPTImageScaledSize(float64(width)/float64(height), scale)
 		}
 	}
-	return 1024, 1024, "1024x1024", nil
+	return scaledImageSize(1024, 1024, scale)
 }
 
 func parseOpenAIImageSizePair(size string) (int, int, bool) {
@@ -1462,19 +1479,21 @@ type gptImage1KPreset struct {
 
 var gptImage1KPresets = []gptImage1KPreset{
 	{Ratio: 1, Width: 1024, Height: 1024},
-	{Ratio: 2.0 / 3.0, Width: 848, Height: 1264},
-	{Ratio: 3.0 / 2.0, Width: 1264, Height: 848},
-	{Ratio: 4.0 / 5.0, Width: 928, Height: 1152},
-	{Ratio: 5.0 / 4.0, Width: 1152, Height: 928},
-	{Ratio: 9.0 / 16.0, Width: 768, Height: 1376},
+	{Ratio: 21.0 / 9.0, Width: 1582, Height: 672},
+	{Ratio: 9.0 / 21.0, Width: 672, Height: 1582},
 	{Ratio: 16.0 / 9.0, Width: 1376, Height: 768},
-	{Ratio: 21.0 / 9.0, Width: 1584, Height: 672},
-	{Ratio: 9.0 / 21.0, Width: 672, Height: 1584},
+	{Ratio: 9.0 / 16.0, Width: 768, Height: 1376},
+	{Ratio: 3.0 / 2.0, Width: 1264, Height: 848},
+	{Ratio: 2.0 / 3.0, Width: 848, Height: 1264},
+	{Ratio: 4.0 / 3.0, Width: 1200, Height: 896},
+	{Ratio: 3.0 / 4.0, Width: 896, Height: 1200},
+	{Ratio: 5.0 / 4.0, Width: 1152, Height: 928},
+	{Ratio: 4.0 / 5.0, Width: 928, Height: 1152},
 }
 
-func nearestGPTImage1KSize(ratio float64) (int, int, string, error) {
+func nearestGPTImageScaledSize(ratio float64, scale int) (int, int, string, error) {
 	if ratio <= 0 || math.IsNaN(ratio) || math.IsInf(ratio, 0) {
-		return 1024, 1024, "1024x1024", nil
+		return scaledImageSize(1024, 1024, scale)
 	}
 	best := gptImage1KPresets[0]
 	bestDistance := math.Abs(math.Log(ratio / best.Ratio))
@@ -1485,7 +1504,15 @@ func nearestGPTImage1KSize(ratio float64) (int, int, string, error) {
 			bestDistance = distance
 		}
 	}
-	width, height := best.Width, best.Height
+	return scaledImageSize(best.Width, best.Height, scale)
+}
+
+func scaledImageSize(width int, height int, scale int) (int, int, string, error) {
+	if scale <= 0 {
+		scale = 1
+	}
+	width *= scale
+	height *= scale
 	return width, height, fmt.Sprintf("%dx%d", width, height), nil
 }
 

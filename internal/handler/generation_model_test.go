@@ -124,12 +124,12 @@ func TestResolveGPTImageSizeMode1K(t *testing.T) {
 		{size: "1152x928", aspectRatio: "", wantWidth: 1152, wantHeight: 928, wantLabel: "1152x928"},
 		{size: "768x1376", aspectRatio: "", wantWidth: 768, wantHeight: 1376, wantLabel: "768x1376"},
 		{size: "1376x768", aspectRatio: "", wantWidth: 1376, wantHeight: 768, wantLabel: "1376x768"},
-		{size: "1584x672", aspectRatio: "", wantWidth: 1584, wantHeight: 672, wantLabel: "1584x672"},
-		{size: "672x1584", aspectRatio: "", wantWidth: 672, wantHeight: 1584, wantLabel: "672x1584"},
+		{size: "1582x672", aspectRatio: "", wantWidth: 1582, wantHeight: 672, wantLabel: "1582x672"},
+		{size: "672x1582", aspectRatio: "", wantWidth: 672, wantHeight: 1582, wantLabel: "672x1582"},
 		{size: "2:3", aspectRatio: "", wantWidth: 848, wantHeight: 1264, wantLabel: "848x1264"},
 		{size: "3:2", aspectRatio: "", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
-		{size: "", aspectRatio: "21:9", wantWidth: 1584, wantHeight: 672, wantLabel: "1584x672"},
-		{size: "", aspectRatio: "9:21", wantWidth: 672, wantHeight: 1584, wantLabel: "672x1584"},
+		{size: "", aspectRatio: "21:9", wantWidth: 1582, wantHeight: 672, wantLabel: "1582x672"},
+		{size: "", aspectRatio: "9:21", wantWidth: 672, wantHeight: 1582, wantLabel: "672x1582"},
 		{size: "bad-size", aspectRatio: "", wantWidth: 1024, wantHeight: 1024, wantLabel: "1024x1024"},
 	}
 	for _, tt := range tests {
@@ -166,6 +166,28 @@ func TestResolveBananaImageSizeSpecific1KMode(t *testing.T) {
 	}
 	if width != 768 || height != 1376 || label != "768x1376" {
 		t.Fatalf("banana 1k size = %dx%d %q, want 768x1376", width, height, label)
+	}
+}
+
+func TestResolveOfficialScaledImageSizes(t *testing.T) {
+	cfg := config.New()
+	cfg.Set("image_size_mode_bananapro", "2k")
+	s := &Server{Config: cfg}
+	width, height, label, err := s.resolveImageRequestSize("bananapro", "1920x1080", "")
+	if err != nil {
+		t.Fatalf("resolveImageRequestSize 2k error = %v", err)
+	}
+	if width != 2752 || height != 1536 || label != "2752x1536" {
+		t.Fatalf("16:9 2k size = %dx%d %q, want 2752x1536", width, height, label)
+	}
+
+	cfg.Set("image_size_mode_bananapro", "4k")
+	width, height, label, err = s.resolveImageRequestSize("bananapro", "1333x1000", "")
+	if err != nil {
+		t.Fatalf("resolveImageRequestSize 4k error = %v", err)
+	}
+	if width != 4800 || height != 3584 || label != "4800x3584" {
+		t.Fatalf("4:3 4k size = %dx%d %q, want 4800x3584", width, height, label)
 	}
 }
 

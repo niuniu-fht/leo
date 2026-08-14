@@ -1308,7 +1308,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   function normalizeImageSizeModeValue(value, fallback = "request") {
     const raw = String(value || fallback || "request").trim().toLowerCase();
-    return raw === "1k" ? "1k" : "request";
+    return ["1k", "2k", "4k"].includes(raw) ? raw : "request";
   }
 
   configCatBtns.forEach((btn) => {
