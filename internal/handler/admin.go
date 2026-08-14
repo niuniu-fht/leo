@@ -2,6 +2,7 @@ package handler
 
 import (
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"leo2api/internal/provider/leonardo"
+	"leo2api/internal/proxyfmt"
 	"leo2api/internal/reqlog"
 	"leo2api/internal/token"
 )
@@ -449,6 +451,14 @@ func (s *Server) validateLeonardoTokenAsync(tokenID, rawToken string) {
 }
 
 func (s *Server) validateLeonardoToken(tokenID, rawToken string) (*leonardo.TokenSession, *leonardo.Credits, error) {
+	return s.validateLeonardoTokenWithMode(tokenID, rawToken, false)
+}
+
+func (s *Server) validateLeonardoTokenForced(tokenID, rawToken string) (*leonardo.TokenSession, *leonardo.Credits, error) {
+	return s.validateLeonardoTokenWithMode(tokenID, rawToken, true)
+}
+
+func (s *Server) validateLeonardoTokenWithMode(tokenID, rawToken string, forceGetSession bool) (*leonardo.TokenSession, *leonardo.Credits, error) {
 	if s.LeonardoClient == nil {
 		return nil, nil, fmt.Errorf("Leonardo client not initialized")
 	}
@@ -456,16 +466,51 @@ func (s *Server) validateLeonardoToken(tokenID, rawToken string) (*leonardo.Toke
 	if session == nil {
 		return nil, nil, fmt.Errorf("token value is required")
 	}
-	if s.shouldForceJWTRefreshOnValidation() {
-		if err := s.LeonardoClient.RefreshSession(session); err != nil {
+	if forceGetSession || s.shouldForceJWTRefreshOnValidation() {
+		var err error
+		if forceGetSession {
+			err = s.LeonardoClient.ForceRefreshSession(session)
+		} else {
+			err = s.LeonardoClient.RefreshSession(session)
+		}
+		if err != nil {
 			return session, nil, fmt.Errorf("token validation failed: %w", err)
 		}
 	}
 	credits, err := s.LeonardoClient.QueryCredits(session)
 	if err != nil {
+		if session.IsJWTValid() && shouldKeepImportedCookiePendingOnRefreshError(err) {
+			if tokenID != "" && s.TokenMgr != nil {
+				_ = s.TokenMgr.UpdateExpiry(tokenID, float64(session.JWTExpiry.Unix()))
+				_ = s.TokenMgr.UpdateAccountInfo(tokenID, session.HasuraUserID, session.Email)
+			}
+			log.Printf("[token] JWT obtained for %s (%s), credits query deferred: %v", tokenID, session.Email, err)
+			return session, nil, nil
+		}
 		return session, nil, fmt.Errorf("token validation failed: %w", err)
 	}
 	return session, credits, nil
+}
+
+type leonardoValidationResult struct {
+	session *leonardo.TokenSession
+	credits *leonardo.Credits
+	err     error
+}
+
+func (s *Server) validateLeonardoTokenForImport(tokenID, rawToken string) (*leonardo.TokenSession, *leonardo.Credits, error) {
+	resultCh := make(chan leonardoValidationResult, 1)
+	go func() {
+		session, credits, err := s.validateLeonardoToken(tokenID, rawToken)
+		resultCh <- leonardoValidationResult{session: session, credits: credits, err: err}
+	}()
+	select {
+	case result := <-resultCh:
+		return result.session, result.credits, result.err
+	case <-time.After(30 * time.Second):
+		session := s.getOrCreateLeonardoSession(tokenID, rawToken)
+		return session, nil, fmt.Errorf("refresh pending: get-session timeout after 30s")
+	}
 }
 
 func (s *Server) shouldForceJWTRefreshOnValidation() bool {
@@ -985,8 +1030,19 @@ func (s *Server) HandleAdminConfig(w http.ResponseWriter, r *http.Request) {
 	if rawPwd, ok := updates["admin_password"].(string); ok && strings.TrimSpace(rawPwd) == "***" {
 		updates["admin_password"] = s.Config.GetString("admin_password", "admin")
 	}
+	for _, key := range []string{"proxy", "resource_proxy", "leonardo_upload_proxy"} {
+		raw := strings.TrimSpace(toString(updates[key]))
+		if raw == "" {
+			continue
+		}
+		normalizedProxy, normalizeErr := proxyfmt.NormalizeHTTPProxyURL(raw)
+		if normalizeErr != nil {
+			writeJSON(w, 400, map[string]string{"detail": fmt.Sprintf("%s 格式错误: %v", key, normalizeErr)})
+			return
+		}
+		updates[key] = normalizedProxy
+	}
 	updates["leonardo_upload_proxy_mode"] = normalizeLeonardoUploadProxyMode(toString(updates["leonardo_upload_proxy_mode"]))
-	updates["leonardo_upload_proxy"] = strings.TrimSpace(toString(updates["leonardo_upload_proxy"]))
 	updates["auto_refresh_max_concurrency"] = normalizeConfigInt(updates["auto_refresh_max_concurrency"], 5, 1, 50)
 	updates["token_max_running_tasks"] = normalizeConfigInt(updates["token_max_running_tasks"], defaultTokenMaxRunningTasks, 1, 10)
 	delete(updates, "sora2_dedicated_mode_enabled")
@@ -1230,7 +1286,7 @@ func (s *Server) HandleTokenRefresh(w http.ResponseWriter, r *http.Request) {
 	tokenValue, _ := tokenInfo["value"].(string)
 
 	if platform == "leonardo" && s.LeonardoClient != nil {
-		session, credits, err := s.validateLeonardoToken(tokenID, tokenValue)
+		session, credits, err := s.validateLeonardoTokenForced(tokenID, tokenValue)
 		if err != nil {
 			failure := s.recordLeonardoRefreshFailure(tokenID, err)
 			writeJSON(w, statusForLeonardoRefreshError(err), map[string]interface{}{
@@ -1265,6 +1321,92 @@ func (s *Server) HandleTokenRefresh(w http.ResponseWriter, r *http.Request) {
 
 	// For non-Leonardo tokens
 	writeJSON(w, 200, map[string]interface{}{"ok": true, "message": "token refresh not supported for this platform"})
+}
+
+// HandleTokenRefreshExpiryTest simulates a soon-to-expire JWT and then runs the
+// same EnsureValidJWT refresh path used by generation requests.
+func (s *Server) HandleTokenRefreshExpiryTest(w http.ResponseWriter, r *http.Request) {
+	if err := s.requireAdmin(r); err != nil {
+		writeJSON(w, 401, map[string]string{"detail": "unauthorized"})
+		return
+	}
+	if s == nil || s.TokenMgr == nil || s.LeonardoClient == nil {
+		writeJSON(w, 500, map[string]string{"detail": "Leonardo client not initialized"})
+		return
+	}
+
+	path := r.URL.Path
+	trimmed := strings.TrimPrefix(path, "/api/v1/tokens/")
+	parts := strings.SplitN(trimmed, "/", 2)
+	tokenID := strings.TrimSpace(parts[0])
+	if tokenID == "" {
+		writeJSON(w, 400, map[string]string{"detail": "token id is required"})
+		return
+	}
+
+	tokenInfo := s.TokenMgr.GetByID(tokenID)
+	if tokenInfo == nil {
+		writeJSON(w, 404, map[string]string{"detail": "token not found"})
+		return
+	}
+	platform := strings.ToLower(strings.TrimSpace(toString(tokenInfo["platform"])))
+	if platform != "leonardo" {
+		writeJSON(w, 400, map[string]string{"detail": "only Leonardo tokens support this test"})
+		return
+	}
+	tokenValue := strings.TrimSpace(toString(tokenInfo["value"]))
+	if tokenValue == "" {
+		writeJSON(w, 400, map[string]string{"detail": "token value is required"})
+		return
+	}
+
+	session := s.getOrCreateLeonardoSession(tokenID, tokenValue)
+	if session == nil {
+		writeJSON(w, 400, map[string]string{"detail": "token session is required"})
+		return
+	}
+
+	beforeRemaining := session.GetJWTRemainingSeconds()
+	forcedExpiry := time.Now().Add(30 * time.Second)
+	session.SetJWTExpiryForTest(forcedExpiry)
+	_ = s.TokenMgr.UpdateExpiry(tokenID, float64(forcedExpiry.Unix()))
+	forcedRemaining := session.GetJWTRemainingSeconds()
+
+	session, credits, err := s.validateLeonardoTokenForImport(tokenID, tokenValue)
+	if err != nil {
+		failure := s.recordLeonardoRefreshFailure(tokenID, err)
+		writeJSON(w, statusForLeonardoRefreshError(err), map[string]interface{}{
+			"ok":                  false,
+			"detail":              "模拟到期刷新失败: " + err.Error(),
+			"before_remaining":    beforeRemaining,
+			"forced_remaining":    forcedRemaining,
+			"refresh_fail_count":  failure.failCount,
+			"refresh_fail_reason": failure.reason,
+			"final_status":        failure.finalStatus,
+		})
+		return
+	}
+
+	s.restoreTokenAfterSuccessfulRefresh(tokenID)
+	_ = s.TokenMgr.UpdateExpiry(tokenID, float64(session.JWTExpiry.Unix()))
+	_ = s.TokenMgr.UpdateAccountInfo(tokenID, session.HasuraUserID, session.Email)
+	if credits != nil {
+		_ = s.TokenMgr.UpdateCredits(tokenID, float64(credits.TotalTokens), float64(credits.SubscriptionTokens+credits.PaidTokens+credits.RolloverTokens))
+	}
+
+	result := map[string]interface{}{
+		"ok":               true,
+		"email":            session.Email,
+		"before_remaining": beforeRemaining,
+		"forced_remaining": forcedRemaining,
+		"after_remaining":  session.GetJWTRemainingSeconds(),
+		"jwt_expiry":       session.JWTExpiry.Format(time.RFC3339),
+	}
+	if credits != nil {
+		result["credits_available"] = credits.TotalTokens
+		result["plan"] = credits.Plan
+	}
+	writeJSON(w, 200, result)
 }
 
 // HandleTokenAutoRefresh handles PUT /api/v1/tokens/{id}/auto-refresh?enabled=true|false.
@@ -1570,10 +1712,256 @@ func (s *Server) importCookiesToTokenPool(inputs []cookieImportInput, source str
 
 func normalizeImportedCookie(raw string) string {
 	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
 	if strings.HasPrefix(strings.ToLower(value), "cookie:") {
 		value = strings.TrimSpace(value[7:])
 	}
+	if strings.HasPrefix(value, "{") || strings.HasPrefix(value, "[") {
+		if parsed := normalizeImportedCookieJSON(value); parsed != "" {
+			return parsed
+		}
+	}
 	return value
+}
+
+func normalizeImportedCookieJSON(raw string) string {
+	var data interface{}
+	if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		return ""
+	}
+	cookie, tokenValue := cookieAndTokenFromJSONValue(data)
+	cookie = strings.TrimSpace(cookie)
+	tokenValue = strings.TrimSpace(tokenValue)
+	if cookie == "" {
+		return ""
+	}
+	if tokenValue != "" && !strings.Contains(cookie, "\ntoken=") && !strings.Contains(cookie, "\naccessToken=") {
+		cookie += "\ntoken=" + tokenValue
+	}
+	return cookie
+}
+
+func cookieAndTokenFromJSONValue(value interface{}) (string, string) {
+	switch typed := value.(type) {
+	case string:
+		return normalizeImportedCookie(typed), ""
+	case []interface{}:
+		return cookieHeaderFromJSONArray(typed), ""
+	case map[string]interface{}:
+		tokenValue := findImportTokenInJSONValue(typed, 0)
+		if rawCookie := firstJSONString(typed, "cookie", "Cookie"); rawCookie != "" {
+			cookie := normalizeImportedCookie(rawCookie)
+			if tokenValue == "" {
+				tokenValue = embeddedImportToken(cookie)
+			}
+			return cookie, tokenValue
+		}
+		if rawCookies, ok := typed["cookies"]; ok {
+			cookie, nestedToken := cookieAndTokenFromJSONValue(rawCookies)
+			if tokenValue == "" {
+				tokenValue = nestedToken
+			}
+			return cookie, tokenValue
+		}
+	}
+	return "", ""
+}
+
+func cookieHeaderFromJSONArray(items []interface{}) string {
+	selected := make([]importCookieCandidate, 0, len(items))
+	selectedIndex := make(map[string]int, len(items))
+	for _, item := range items {
+		switch typed := item.(type) {
+		case string:
+			if txt := strings.TrimSpace(typed); txt != "" {
+				if pairs := normalizeImportedCookiePairs(txt); len(pairs) > 0 {
+					for _, pair := range pairs {
+						if name, value, ok := strings.Cut(pair, "="); ok {
+							mergeImportCookieCandidate(&selected, selectedIndex, importCookieCandidate{
+								name:  strings.TrimSpace(name),
+								value: strings.TrimSpace(value),
+							})
+						}
+					}
+				}
+			}
+		case map[string]interface{}:
+			name := strings.TrimSpace(toString(typed["name"]))
+			value := strings.TrimSpace(toString(typed["value"]))
+			if name == "" {
+				continue
+			}
+			if value == "" || strings.ContainsAny(name, ";\r\n") || strings.ContainsAny(value, "\r\n") {
+				continue
+			}
+			domain := strings.ToLower(strings.TrimSpace(toString(typed["domain"])))
+			normalizedDomain := strings.TrimPrefix(domain, ".")
+			if normalizedDomain != "" &&
+				normalizedDomain != "leonardo.ai" &&
+				normalizedDomain != "app.leonardo.ai" &&
+				!strings.HasSuffix(normalizedDomain, ".leonardo.ai") {
+				continue
+			}
+			hostOnly, _ := typed["hostOnly"].(bool)
+			path := strings.TrimSpace(toString(typed["path"]))
+			score := 0
+			if normalizedDomain == "app.leonardo.ai" {
+				score += 4
+			}
+			if hostOnly && domain == "app.leonardo.ai" {
+				score += 4
+			}
+			if path == "/" || path == "" {
+				score++
+			}
+			mergeImportCookieCandidate(&selected, selectedIndex, importCookieCandidate{
+				name:       name,
+				value:      value,
+				score:      score,
+				expiration: toFloat64(typed["expirationDate"]),
+			})
+		}
+	}
+	pairs := make([]string, 0, len(selected))
+	for _, cookie := range selected {
+		pairs = append(pairs, cookie.name+"="+cookie.value)
+	}
+	return strings.Join(pairs, "; ")
+}
+
+type importCookieCandidate struct {
+	name       string
+	value      string
+	score      int
+	expiration float64
+}
+
+func mergeImportCookieCandidate(selected *[]importCookieCandidate, selectedIndex map[string]int, candidate importCookieCandidate) {
+	if strings.TrimSpace(candidate.name) == "" || strings.TrimSpace(candidate.value) == "" {
+		return
+	}
+	key := strings.ToLower(strings.TrimSpace(candidate.name))
+	if index, exists := selectedIndex[key]; exists {
+		previous := (*selected)[index]
+		if candidate.score > previous.score || (candidate.score == previous.score && candidate.expiration >= previous.expiration) {
+			(*selected)[index] = candidate
+		}
+		return
+	}
+	selectedIndex[key] = len(*selected)
+	*selected = append(*selected, candidate)
+}
+
+func normalizeImportedCookiePairs(raw string) []string {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return nil
+	}
+	if strings.HasPrefix(strings.ToLower(text), "cookie=") {
+		text = strings.TrimSpace(text[len("cookie="):])
+	} else if strings.HasPrefix(strings.ToLower(text), "cookie:") {
+		text = strings.TrimSpace(text[len("cookie:"):])
+	}
+	parts := strings.Split(text, ";")
+	pairs := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" || !strings.Contains(part, "=") {
+			continue
+		}
+		name, value, _ := strings.Cut(part, "=")
+		name = strings.TrimSpace(name)
+		value = strings.TrimSpace(value)
+		if name == "" || value == "" || strings.ContainsAny(name, ";\r\n") || strings.ContainsAny(value, "\r\n") {
+			continue
+		}
+		pairs = append(pairs, name+"="+value)
+	}
+	return pairs
+}
+
+func findImportTokenInJSONValue(value interface{}, depth int) string {
+	if depth > 8 || value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		text := strings.TrimSpace(typed)
+		if looksLikeImportJWT(text) {
+			return text
+		}
+		if strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[") {
+			var nested interface{}
+			if err := json.Unmarshal([]byte(text), &nested); err == nil {
+				if token := findImportTokenInJSONValue(nested, depth+1); token != "" {
+					return token
+				}
+			}
+		}
+		for _, field := range strings.FieldsFunc(text, func(r rune) bool {
+			return r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' ' || r == '"' || r == '\''
+		}) {
+			field = strings.TrimSpace(field)
+			if looksLikeImportJWT(field) {
+				return field
+			}
+			if _, token, ok := strings.Cut(field, "="); ok && looksLikeImportJWT(strings.TrimSpace(token)) {
+				return strings.TrimSpace(token)
+			}
+		}
+	case []interface{}:
+		for _, item := range typed {
+			if token := findImportTokenInJSONValue(item, depth+1); token != "" {
+				return token
+			}
+		}
+	case map[string]interface{}:
+		for _, key := range []string{"accessToken", "access_token", "idToken", "id_token", "token", "jwt"} {
+			if raw, ok := typed[key].(string); ok && strings.TrimSpace(raw) != "" {
+				return strings.TrimSpace(raw)
+			}
+			if token := findImportTokenInJSONValue(typed[key], depth+1); token != "" {
+				return token
+			}
+		}
+		for _, key := range []string{"localStorageDump", "local_storage_dump", "localStorage", "storage", "session", "user", "auth"} {
+			if token := findImportTokenInJSONValue(typed[key], depth+1); token != "" {
+				return token
+			}
+		}
+	}
+	return ""
+}
+
+func looksLikeImportJWT(token string) bool {
+	token = strings.Trim(strings.TrimSpace(token), `"'`)
+	return len(token) > 80 && strings.Count(token, ".") == 2
+}
+
+func firstJSONString(data map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(toString(data[key])); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func embeddedImportToken(cookie string) string {
+	for _, line := range strings.FieldsFunc(cookie, func(r rune) bool { return r == '\n' || r == '\r' }) {
+		line = strings.TrimSpace(line)
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.ToLower(strings.TrimSpace(key))
+		if key == "token" || key == "accesstoken" || key == "access_token" || key == "jwt" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func newCookieImportJob(inputs []cookieImportInput) *cookieImportJob {
@@ -1730,22 +2118,35 @@ func (s *Server) runCookieImportJob(jobID string, inputs []cookieImportInput) {
 					}
 					s.cookieImportMu.Unlock()
 				} else {
-					session, credits, err := s.validateLeonardoToken(tokenID, input.Cookie)
+					session, credits, err := s.validateLeonardoTokenForImport(tokenID, input.Cookie)
 					if err != nil {
-						status = "failed"
-						detail = "已导入，但刷新失败: " + err.Error()
-						failure := s.recordLeonardoRefreshFailure(tokenID, err)
-						if failure.finalStatus != "" {
-							status = failure.finalStatus
+						if shouldKeepImportedCookiePendingOnRefreshError(err) {
+							status = "ok"
+							detail = "已导入，刷新链路暂时未命中，账号保留为 active，后续自动刷新继续尝试"
+							s.restoreTokenAfterSuccessfulRefresh(tokenID)
+							s.cookieImportMu.Lock()
+							job := s.cookieImportJobs[jobID]
+							if job != nil {
+								job.SuccessCount++
+								job.Items[idx]["refresh_pending_reason"] = err.Error()
+							}
+							s.cookieImportMu.Unlock()
+						} else {
+							status = "failed"
+							detail = "已导入，但刷新失败: " + err.Error()
+							failure := s.recordLeonardoRefreshFailure(tokenID, err)
+							if failure.finalStatus != "" {
+								status = failure.finalStatus
+							}
+							s.cookieImportMu.Lock()
+							job := s.cookieImportJobs[jobID]
+							if job != nil {
+								job.ErrorCount++
+								job.Items[idx]["refresh_fail_count"] = failure.failCount
+								job.Items[idx]["refresh_fail_reason"] = failure.reason
+							}
+							s.cookieImportMu.Unlock()
 						}
-						s.cookieImportMu.Lock()
-						job := s.cookieImportJobs[jobID]
-						if job != nil {
-							job.ErrorCount++
-							job.Items[idx]["refresh_fail_count"] = failure.failCount
-							job.Items[idx]["refresh_fail_reason"] = failure.reason
-						}
-						s.cookieImportMu.Unlock()
 					} else {
 						s.restoreTokenAfterSuccessfulRefresh(tokenID)
 						_ = s.TokenMgr.UpdateExpiry(tokenID, float64(session.JWTExpiry.Unix()))
@@ -1960,7 +2361,7 @@ func (s *Server) runTokenRefreshBatchJob(jobID string, ids []string) {
 				}
 				s.tokenRefreshJobMu.Unlock()
 			} else {
-				session, credits, err := s.validateLeonardoToken(id, tokenValue)
+				session, credits, err := s.validateLeonardoTokenForced(id, tokenValue)
 				if err != nil {
 					status = "failed"
 					detail = err.Error()
@@ -2869,11 +3270,108 @@ func (s *Server) resolveLeonardoAudioRef(session *leonardo.TokenSession, id, rem
 }
 
 func (s *Server) uploadLeonardoImageFromURL(session *leonardo.TokenSession, remoteURL string) (string, error) {
+	if imageData, contentType, ext, handled, err := decodeImageBase64Input(remoteURL); handled {
+		if err != nil {
+			return "", err
+		}
+		return s.uploadLeonardoImageBytes(session, imageData, ext, contentType)
+	}
 	imageData, contentType, ext, err := s.downloadRemoteImage(remoteURL)
 	if err != nil {
 		return "", err
 	}
 	return s.uploadLeonardoImageBytes(session, imageData, ext, contentType)
+}
+
+func decodeImageBase64Input(raw string) ([]byte, string, string, bool, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, "", "", false, nil
+	}
+
+	contentType := ""
+	encoded := raw
+	handled := false
+	if strings.HasPrefix(strings.ToLower(raw), "data:") {
+		comma := strings.Index(raw, ",")
+		if comma < 0 {
+			return nil, "", "", true, fmt.Errorf("invalid image data url")
+		}
+		meta := raw[:comma]
+		encoded = raw[comma+1:]
+		handled = true
+		if !strings.Contains(strings.ToLower(meta), ";base64") {
+			return nil, "", "", true, fmt.Errorf("image data url must be base64")
+		}
+		mediaType := strings.TrimPrefix(strings.Split(meta, ";")[0], "data:")
+		if mediaType != "" {
+			contentType = strings.ToLower(strings.TrimSpace(mediaType))
+		}
+	} else if looksLikeRawBase64Image(raw) {
+		handled = true
+	}
+	if !handled {
+		return nil, "", "", false, nil
+	}
+
+	encoded = strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '\n', '\r', '\t':
+			return -1
+		default:
+			return r
+		}
+	}, encoded)
+	if encoded == "" {
+		return nil, "", "", true, fmt.Errorf("image base64 is empty")
+	}
+	if len(encoded) > (maxRemoteImageBytes*4/3)+4096 {
+		return nil, "", "", true, fmt.Errorf("image base64 exceeds %d MB limit", maxRemoteImageBytes>>20)
+	}
+
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		if data, err = base64.RawStdEncoding.DecodeString(encoded); err != nil {
+			return nil, "", "", true, fmt.Errorf("decode image base64 failed: %w", err)
+		}
+	}
+	if len(data) == 0 {
+		return nil, "", "", true, fmt.Errorf("image base64 returned empty body")
+	}
+	if len(data) > maxRemoteImageBytes {
+		return nil, "", "", true, fmt.Errorf("image base64 exceeds %d MB limit", maxRemoteImageBytes>>20)
+	}
+	if contentType == "" {
+		contentType = http.DetectContentType(data)
+	}
+	if !strings.HasPrefix(strings.ToLower(contentType), "image/") {
+		return nil, "", "", true, fmt.Errorf("image base64 did not decode to an image content type")
+	}
+	ext := imageExtFromContentType(contentType)
+	if ext == "" {
+		ext = "jpg"
+	}
+	return data, contentType, ext, true, nil
+}
+
+func looksLikeRawBase64Image(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if len(raw) < 64 || strings.Contains(raw, "://") {
+		return false
+	}
+	prefix := raw
+	if len(prefix) > 64 {
+		prefix = prefix[:64]
+	}
+	prefix = strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '\n', '\r', '\t':
+			return -1
+		default:
+			return r
+		}
+	}, prefix)
+	return strings.HasPrefix(prefix, "/9j/") || strings.HasPrefix(prefix, "iVBORw0KGgo") || strings.HasPrefix(prefix, "R0lGOD") || strings.HasPrefix(prefix, "UklGR")
 }
 
 func isLeonardoS3PolicyExpired(err error) bool {
@@ -3435,7 +3933,11 @@ func (s *Server) newResourceHTTPClient(timeout time.Duration) (*http.Client, err
 	}
 
 	if proxyStr != "" {
-		proxyURL, err := url.Parse(proxyStr)
+		normalizedProxy, err := proxyfmt.NormalizeHTTPProxyURL(proxyStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid proxy url: %w", err)
+		}
+		proxyURL, err := url.Parse(normalizedProxy)
 		if err != nil {
 			return nil, fmt.Errorf("invalid proxy url: %w", err)
 		}
@@ -4277,7 +4779,11 @@ func runHTTPProxyConnectivityTest(enabled bool, proxyStr, targetURL string) map[
 }
 
 func doHTTPProxyProbe(proxyStr, targetURL string) (int, string, error) {
-	proxyURL, err := url.Parse(strings.TrimSpace(proxyStr))
+	normalizedProxy, err := proxyfmt.NormalizeHTTPProxyURL(proxyStr)
+	if err != nil {
+		return 0, "", fmt.Errorf("invalid proxy url: %w", err)
+	}
+	proxyURL, err := url.Parse(normalizedProxy)
 	if err != nil {
 		return 0, "", fmt.Errorf("invalid proxy url: %w", err)
 	}

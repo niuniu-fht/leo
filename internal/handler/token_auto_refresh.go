@@ -192,7 +192,7 @@ func (s *Server) refreshLeonardoTokenByID(tokenID string) {
 		return
 	}
 
-	session, credits, err := s.validateLeonardoToken(tokenID, rawToken)
+	session, credits, err := s.validateLeonardoTokenForced(tokenID, rawToken)
 	if err != nil {
 		result := s.recordLeonardoRefreshFailure(tokenID, err)
 		log.Printf("[token] auto-refresh failed for %s: %v", tokenID, err)
@@ -357,6 +357,30 @@ func isLeonardoChallengeError(msg string) bool {
 		strings.Contains(msg, "vercel challenge") ||
 		strings.Contains(msg, "cloudflare challenge") ||
 		strings.Contains(msg, "x-vercel-challenge")
+}
+
+func shouldKeepImportedCookiePendingOnRefreshError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return isLeonardoChallengeError(msg) ||
+		strings.Contains(msg, "get-session http 429") ||
+		strings.Contains(msg, "refresh pending") ||
+		strings.Contains(msg, "mitigated=challenge") ||
+		strings.Contains(msg, "connection error") ||
+		strings.Contains(msg, "proxyconnect") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "no connection could be made") ||
+		strings.Contains(msg, "connection attempt failed") ||
+		strings.Contains(msg, "timed out") ||
+		strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "dial tcp") ||
+		strings.Contains(msg, "dial tcp4") ||
+		strings.Contains(msg, "actively refused") ||
+		strings.Contains(msg, "forcibly closed by the remote host") ||
+		strings.Contains(msg, "get-session returned no jwt") ||
+		strings.Contains(msg, "no jwt found")
 }
 
 type leonardoRefreshFailureResult struct {

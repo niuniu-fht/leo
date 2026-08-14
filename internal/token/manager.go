@@ -156,6 +156,16 @@ func (m *Manager) sortByImportOrderLocked() {
 	})
 }
 
+func (m *Manager) nextAddedAtLocked() float64 {
+	now := currentTimestamp()
+	for _, t := range m.tokens {
+		if t != nil && t.AddedAt >= now {
+			now = t.AddedAt + 0.000001
+		}
+	}
+	return now
+}
+
 func currentTimestamp() float64 {
 	return float64(time.Now().UnixNano()) / float64(time.Second)
 }
@@ -222,7 +232,7 @@ func (m *Manager) Add(value, platform, tokenType, accountName, accountEmail, sou
 		}
 	}
 
-	now := currentTimestamp()
+	now := m.nextAddedAtLocked()
 	t := &Token{
 		ID:           tokenID,
 		Value:        value,
@@ -810,8 +820,6 @@ func (m *Manager) UpsertAutoRefreshed(value, accountName, accountEmail, userID, 
 	}
 
 	tokenID := GenerateTokenID(value)
-	now := currentTimestamp()
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -869,6 +877,7 @@ func (m *Manager) UpsertAutoRefreshed(value, accountName, accountEmail, userID, 
 	}
 
 	// New token
+	now := m.nextAddedAtLocked()
 	t := &Token{
 		ID:                 tokenID,
 		Value:              value,
@@ -946,7 +955,6 @@ func (m *Manager) upsertImportedCookieLocked(value, accountName, accountEmail, u
 	}
 
 	tokenID := GenerateTokenID(value)
-	now := currentTimestamp()
 	accountEmail = strings.TrimSpace(accountEmail)
 	userID = strings.TrimSpace(userID)
 	status = strings.ToLower(strings.TrimSpace(status))
@@ -1013,6 +1021,7 @@ func (m *Manager) upsertImportedCookieLocked(value, accountName, accountEmail, u
 		return t, true, false, nil
 	}
 
+	now := m.nextAddedAtLocked()
 	t := &Token{
 		ID:            tokenID,
 		Value:         value,

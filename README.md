@@ -12,8 +12,8 @@
 
 ## ✨ 特性
 
-- ✅ **OpenAI 风格接口**：`POST /v1/video/generations` 一行接入，SDK/curl 直接替换 Base URL
-- ✅ **多模型反代**：`video-2.0`（seedance-2.0）、`sora2`、`ko3`（kling-o3）、`minimax-h3`（hailuo-03）
+- ✅ **OpenAI 风格接口**：`POST /v1/video/generations`、`POST /v1/images/generations` 一行接入，SDK/curl 直接替换 Base URL
+- ✅ **多模型反代**：视频 `video-2.0` / `sora2` / `ko3` / `minimax-h3`，图片 `gpt-image-2` / `gpt-image-2-high` / `gpt-image-2-higher`
 - ✅ **Token 池自动调度**：轮换策略（round_robin / random）、单 Token 并发上限、积分门槛跳过
 - ✅ **自动保活**：JWT 到期前自动刷新，账号长期在线，无需人工干预
 - ✅ **额度管理**：积分实时检测、额度耗尽自动禁用/清理、失败任务积分结算回补
@@ -116,11 +116,28 @@ curl -X POST http://127.0.0.1:8787/v1/video/generations \
 
 提交成功返回 `202 Accepted`。生成是异步的，需要使用响应中的 `poll_url` 查询结果。
 
+图片生成：
+
+```bash
+curl -X POST http://127.0.0.1:8787/v1/images/generations \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-image-2-higher",
+    "prompt": "A high detail product render of a translucent mechanical keyboard, studio lighting",
+    "size": "1536x1536",
+    "n": 1
+  }'
+```
+
+图片接口同步等待上游完成，成功后返回 OpenAI 风格 `data[].url`。
+
 ## 公共 API
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/v1/models` | 查询支持的模型 |
+| `POST` | `/v1/images/generations` | 同步生成图片，返回 OpenAI 风格 `data[].url` |
 | `POST` | `/v1/video/generations` | 提交视频生成任务 |
 | `GET` | `/v1/video/generations/{generation_id}` | 查询任务状态和结果 |
 | `POST` | `/v1/video/async-generations` | 提交任务的兼容别名 |
@@ -145,6 +162,9 @@ curl http://127.0.0.1:8787/v1/models \
 
 | 推荐模型名 | 上游模型 | 默认时长 | 默认尺寸 | 支持时长 | 参考能力 |
 | --- | --- | ---: | --- | --- | --- |
+| `gpt-image-2` | 配置项 `image_model_id*` | - | `1536x1536` | - | 图片生成，固定 `quality=low` |
+| `gpt-image-2-high` | 配置项 `image_model_id*` | - | `1536x1536` | - | 图片生成，固定 `quality=medium` |
+| `gpt-image-2-higher` | 配置项 `image_model_id*` | - | `1536x1536` | - | 图片生成，固定 `quality=high` |
 | `video-2.0` | `seedance-2.0` | 10 秒 | `1280x720` | 4–15 秒 | 图片、首尾帧、视频、音频 |
 | `video-2.0-fast` | `seedance-2.0-fast` | 10 秒 | `1280x720` | 4–15 秒 | 图片、首尾帧、视频、音频 |
 | `video-2.0-mini` | `seedance-2.0-mini` | 10 秒 | `1280x720` | 4–15 秒 | 图片、首尾帧、视频、音频 |
@@ -156,6 +176,8 @@ curl http://127.0.0.1:8787/v1/models \
 | `minimax-h3` | `hailuo-03` | 5 秒 | `2560x1440` | 5–15 秒 | 图片、首尾帧、图片加音频 |
 
 `size` 的格式统一为 `宽x高`。
+
+图片模型的质量由服务端按 `model` 固定映射：`gpt-image-2 -> low`，`gpt-image-2-high -> medium`，`gpt-image-2-higher -> high`。请求体里的 `quality` 字段会被忽略。
 
 ### 模型别名
 
@@ -175,6 +197,17 @@ curl http://127.0.0.1:8787/v1/models \
 MiniMax H3 的公共 API 请求、响应和请求日志统一使用 `minimax-h3`；不接受 `h3` 或 `hailuo-03` 作为公共请求模型名。`hailuo-03` 仅是服务调用 Leonardo 时的内部上游映射。
 
 ### 尺寸与比例
+
+#### 图片生成
+
+| `aspect_ratio` | `size` |
+| --- | --- |
+| `1:1` | `1536x1536` |
+| `16:9` | `2752x1536` |
+| `9:16` | `1536x2752` |
+| `4:3` | `2048x1536` |
+
+也可直接传 `size`，例如 `1024x1024`、`1536x1536`、`2752x1536`、`1536x2752`、`2048x1536`。
 
 #### Video 2.0
 
@@ -279,6 +312,8 @@ MiniMax H3 默认使用 2K。`size` 和 Leonardo 上游参数均按输出视频�
 
 远程图片会先上传到 Leonardo，再转换为 `guidances.image_reference`。
 
+图片生成接口支持 `image_url` / `image_urls` 作为图生图参考，最多取前 4 张，默认参考强度 `MID`。
+
 除 `sora2` 外，`image_url` 默认都是图片参考；`sora2` 为兼容旧格式，会把 `image_url` 当作首帧。
 
 ### 首尾帧字段
@@ -316,6 +351,45 @@ MiniMax H3 默认使用 2K。`size` 和 Leonardo 上游参数均按输出视频�
 
 ```text
 POST /v1/video/generations
+```
+
+图片生成示例提交到：
+
+```text
+POST /v1/images/generations
+```
+
+### 文生图
+
+```json
+{
+  "model": "gpt-image-2",
+  "prompt": "一只玻璃质感的白猫坐在赛博朋克雨夜街角",
+  "size": "1536x1536",
+  "n": 1
+}
+```
+
+### 高质量图片
+
+```json
+{
+  "model": "gpt-image-2-higher",
+  "prompt": "Ultra detailed cinematic concept art, mountain temple above clouds",
+  "aspect_ratio": "16:9",
+  "n": 1
+}
+```
+
+### 图生图
+
+```json
+{
+  "model": "gpt-image-2-high",
+  "prompt": "保持主体姿态，改成高级商业海报风格",
+  "image_url": "https://example.com/source.png",
+  "size": "1536x1536"
+}
 ```
 
 ### 文生视频
@@ -650,6 +724,11 @@ config/config.json
   "api_key": "",
   "proxy": "",
   "use_proxy": false,
+  "image_request_model": "nano-banana-2",
+  "image_model_id": "",
+  "image_model_id_gpt_image_2": "",
+  "image_model_id_gpt_image_2_high": "",
+  "image_model_id_gpt_image_2_higher": "",
   "generate_timeout": 300,
   "retry_enabled": true,
   "retry_max_attempts": 3,
@@ -660,6 +739,28 @@ config/config.json
   "exhausted_token_auto_cleanup_interval_hours": 24
 }
 ```
+
+### 图片模型配置
+
+图片生成走 Leonardo `Generate` GraphQL，公共模型 ID 与质量固定如下：
+
+| 公共模型 | 上游 `quality` |
+| --- | --- |
+| `gpt-image-2` | `low` |
+| `gpt-image-2-high` | `medium` |
+| `gpt-image-2-higher` | `high` |
+
+上游图片模型 UUID 可通过配置映射：
+
+| 配置项 | 作用 |
+| --- | --- |
+| `image_request_model` | Leonardo `request.model`，默认 `nano-banana-2` |
+| `image_model_id` | 三个公共图片模型共用的默认上游 `modelId` |
+| `image_model_id_gpt_image_2` | 覆盖 `gpt-image-2` 使用的上游 `modelId` |
+| `image_model_id_gpt_image_2_high` | 覆盖 `gpt-image-2-high` 使用的上游 `modelId` |
+| `image_model_id_gpt_image_2_higher` | 覆盖 `gpt-image-2-higher` 使用的上游 `modelId` |
+
+如果三个质量档使用同一个上游模型，只填 `image_model_id` 或 `image_model_id_gpt_image_2` 即可；如果每档不同，就分别填写三个覆盖项。
 
 ### Token 轮换
 

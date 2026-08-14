@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -40,6 +41,74 @@ func TestUploadImageToS3RetriesTransientUploadErrors(t *testing.T) {
 	}
 	if attempts != s3UploadMaxAttempts {
 		t.Fatalf("attempts = %d, want %d", attempts, s3UploadMaxAttempts)
+	}
+}
+
+func TestGenerateImageBuildsNativeGPTImage2Payload(t *testing.T) {
+	var requestBody string
+	client := NewClient("")
+	client.httpClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read request body: %v", err)
+			}
+			requestBody = string(body)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"data":{"generate":{"apiCreditCost":3,"generationId":"gen-gpt-image-2"}}}`)),
+			}, nil
+		}),
+	}
+	session := &TokenSession{JWT: "jwt", JWTExpiry: time.Now().Add(time.Hour)}
+
+	result, err := client.GenerateImage(session, &ImageGenerateRequest{
+		RequestModel:       "gpt-image-2",
+		Prompt:             "a cat",
+		Quality:            "low",
+		Width:              1024,
+		Height:             1024,
+		Quantity:           1,
+		Public:             true,
+		NativeModelRequest: true,
+		PromptEnhance:      "OFF",
+		StyleIDs:           []string{"556c1ee5-ec38-42e8-955a-1e82dad0ffa1"},
+	})
+	if err != nil {
+		t.Fatalf("GenerateImage returned error: %v", err)
+	}
+	if result.GenerationID != "gen-gpt-image-2" || result.APICreditCost != 3 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+
+	payload := mustJSONMap(t, requestBody)
+	request := payload["variables"].(map[string]interface{})["request"].(map[string]interface{})
+	if request["model"] != "gpt-image-2" {
+		t.Fatalf("model = %v, want gpt-image-2", request["model"])
+	}
+	params := request["parameters"].(map[string]interface{})
+	want := map[string]interface{}{
+		"width":          float64(1024),
+		"height":         float64(1024),
+		"prompt":         "a cat",
+		"quantity":       float64(1),
+		"quality":        "LOW",
+		"prompt_enhance": "OFF",
+		"style_ids":      []interface{}{"556c1ee5-ec38-42e8-955a-1e82dad0ffa1"},
+	}
+	if len(params) != len(want) {
+		t.Fatalf("params keys = %v, want only %v", keysOf(params), keysOf(want))
+	}
+	for key, wantValue := range want {
+		if !reflect.DeepEqual(params[key], wantValue) {
+			t.Fatalf("params[%s] = %v, want %v", key, params[key], wantValue)
+		}
+	}
+	for _, omitted := range []string{"modelId", "dimensions", "negative_prompt"} {
+		if _, ok := params[omitted]; ok {
+			t.Fatalf("params should omit %s: %v", omitted, params)
+		}
 	}
 }
 

@@ -2,6 +2,7 @@ package leonardo
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/imroc/req/v3"
+
+	"leo2api/internal/proxyfmt"
 )
 
 // ──────────────────────────────────────────────────────────
@@ -29,8 +34,13 @@ const (
 	JWTMarginSec = 300 // JWT 过期前 5 分钟就刷新
 )
 
+const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+	"(KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36"
+
 const (
 	defaultClientTimeout   = 120 * time.Second
+	sessionRefreshTimeout  = 12 * time.Second
+	sessionDialTimeout     = 4 * time.Second
 	uploadInitTimeout      = 300 * time.Second
 	s3UploadRequestTimeout = 500 * time.Second
 	defaultInitWait        = 180 * time.Second
@@ -41,6 +51,7 @@ const (
 )
 
 const defaultJWTRefreshMargin = 5 * time.Minute
+const embeddedJWTAcceptMargin = 120 * time.Second
 
 func isRetryableGraphQLError(err error) bool {
 	if err == nil {
@@ -66,15 +77,15 @@ type TokenSession struct {
 	mu                   sync.RWMutex
 	refreshMu            sync.Mutex
 	cookiePersistHandler func(string)
-	FullCookie    string    // 完整的 cookie 字符串（用户从浏览器复制的）
-	SourceCookie  string    // 最近一次从持久化层读取的原始 Cookie；用于识别外部更新
-	JWT           string    // Cognito id_token (short-lived, ~1h)
-	JWTExpiry     time.Time // JWT expiration time
-	CognitoSub    string    // e.g. "5f2e877a-0c1a-4ea1-b893-bfb4a6567a22"
-	HasuraUserID  string    // e.g. "d5b484fd-1dcc-4cf5-a7a1-9ea83abd41ce"
-	Email         string
-	Plan          string
-	LastRefreshed time.Time
+	FullCookie           string    // 完整的 cookie 字符串（用户从浏览器复制的）
+	SourceCookie         string    // 最近一次从持久化层读取的原始 Cookie；用于识别外部更新
+	JWT                  string    // Cognito id_token (short-lived, ~1h)
+	JWTExpiry            time.Time // JWT expiration time
+	CognitoSub           string    // e.g. "5f2e877a-0c1a-4ea1-b893-bfb4a6567a22"
+	HasuraUserID         string    // e.g. "d5b484fd-1dcc-4cf5-a7a1-9ea83abd41ce"
+	Email                string
+	Plan                 string
+	LastRefreshed        time.Time
 }
 
 // CookieSnapshot returns the current cookie string, including any server
@@ -136,27 +147,40 @@ type Credits struct {
 
 // Client manages Leonardo API interactions.
 type Client struct {
-	httpClient           *http.Client
-	uploadInitHTTPClient *http.Client
-	uploadHTTPClient     *http.Client
-	proxy                string
-	uploadProxyMode      string
-	uploadProxy          string
-	jwtRefreshMargin     time.Duration
+	httpClient                      *http.Client
+	defaultHTTPClient               *http.Client
+	directHTTPClient                *http.Client
+	sessionImpersonatorClient       *req.Client
+	directSessionImpersonatorClient *req.Client
+	uploadInitHTTPClient            *http.Client
+	uploadHTTPClient                *http.Client
+	proxy                           string
+	uploadProxyMode                 string
+	uploadProxy                     string
+	jwtRefreshMargin                time.Duration
 }
 
 // NewClient creates a new Leonardo client.
 func NewClient(proxy string) *Client {
+	normalizedProxy, err := proxyfmt.NormalizeHTTPProxyURL(proxy)
+	if err == nil {
+		proxy = normalizedProxy
+	}
 	httpClient, _ := newLeonardoHTTPClient(proxy, defaultClientTimeout)
 	uploadInitHTTPClient, _ := newLeonardoHTTPClient(proxy, uploadInitTimeout)
 	uploadHTTPClient, _ := newLeonardoHTTPClient(proxy, s3UploadRequestTimeout)
+	directHTTPClient, _ := newLeonardoHTTPClient("", defaultClientTimeout)
 	return &Client{
-		httpClient:           httpClient,
-		uploadInitHTTPClient: uploadInitHTTPClient,
-		uploadHTTPClient:     uploadHTTPClient,
-		proxy:                proxy,
-		uploadProxyMode:      "basic",
-		jwtRefreshMargin:     defaultJWTRefreshMargin,
+		httpClient:                      httpClient,
+		defaultHTTPClient:               httpClient,
+		directHTTPClient:                directHTTPClient,
+		sessionImpersonatorClient:       newLeonardoSessionImpersonator(proxy, sessionRefreshTimeout),
+		directSessionImpersonatorClient: newLeonardoSessionImpersonator("", sessionRefreshTimeout),
+		uploadInitHTTPClient:            uploadInitHTTPClient,
+		uploadHTTPClient:                uploadHTTPClient,
+		proxy:                           proxy,
+		uploadProxyMode:                 "basic",
+		jwtRefreshMargin:                defaultJWTRefreshMargin,
 	}
 }
 
@@ -174,7 +198,11 @@ func NewClientWithUploadProxyConfig(proxy string, uploadMode string, uploadProxy
 func newLeonardoHTTPClient(proxy string, timeout time.Duration) (*http.Client, error) {
 	transport := &http.Transport{}
 	if strings.TrimSpace(proxy) != "" {
-		proxyURL, err := url.Parse(strings.TrimSpace(proxy))
+		normalizedProxy, err := proxyfmt.NormalizeHTTPProxyURL(proxy)
+		if err != nil {
+			return nil, fmt.Errorf("invalid proxy url: %w", err)
+		}
+		proxyURL, err := url.Parse(normalizedProxy)
 		if err != nil {
 			return nil, fmt.Errorf("invalid proxy url: %w", err)
 		}
@@ -184,6 +212,51 @@ func newLeonardoHTTPClient(proxy string, timeout time.Duration) (*http.Client, e
 		Transport: transport,
 		Timeout:   timeout,
 	}, nil
+}
+
+func newLeonardoSessionImpersonator(proxy string, timeout time.Duration) *req.Client {
+	client := req.C().
+		SetTimeout(timeout).
+		SetDial(dialContextPreferIPv4).
+		ImpersonateChrome().
+		SetCommonHeader("user-agent", defaultUserAgent).
+		SetCookieJar(nil)
+	if strings.TrimSpace(proxy) != "" {
+		normalizedProxy, err := proxyfmt.NormalizeHTTPProxyURL(proxy)
+		if err == nil {
+			client.SetProxyURL(normalizedProxy)
+		} else {
+			client.SetProxyURL(strings.TrimSpace(proxy))
+		}
+	}
+	return client
+}
+
+func dialContextPreferIPv4(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := &net.Dialer{Timeout: sessionDialTimeout, KeepAlive: 30 * time.Second}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || strings.TrimSpace(host) == "" || strings.TrimSpace(port) == "" {
+		return dialer.DialContext(ctx, network, addr)
+	}
+	ips, lookupErr := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if lookupErr != nil || len(ips) == 0 {
+		return dialer.DialContext(ctx, network, addr)
+	}
+	var lastErr error
+	for _, ip := range ips {
+		if ip.To4() == nil {
+			continue
+		}
+		conn, err := dialer.DialContext(ctx, "tcp4", net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return dialer.DialContext(ctx, network, addr)
 }
 
 func (c *Client) SetUploadProxyConfig(mode string, proxy string) error {
@@ -216,7 +289,11 @@ func (c *Client) SetUploadProxyConfig(mode string, proxy string) error {
 
 	c.uploadHTTPClient = uploadClient
 	c.uploadProxyMode = mode
-	c.uploadProxy = strings.TrimSpace(proxy)
+	if normalizedProxy, normalizeErr := proxyfmt.NormalizeHTTPProxyURL(proxy); normalizeErr == nil {
+		c.uploadProxy = normalizedProxy
+	} else {
+		c.uploadProxy = strings.TrimSpace(proxy)
+	}
 	return nil
 }
 
@@ -426,113 +503,368 @@ type sessionResponse struct {
 	} `json:"session"`
 }
 
-// RefreshSession calls get-session to obtain a fresh JWT.
+// RefreshSession calls get-session to obtain a fresh JWT when the imported
+// payload does not already contain a usable embedded JWT.
 func (c *Client) RefreshSession(session *TokenSession) error {
+	return c.refreshSession(session, false)
+}
+
+// ForceRefreshSession calls get-session and skips embedded JWT reuse. Use this
+// for explicit refresh actions and near-expiry auto refresh jobs.
+func (c *Client) ForceRefreshSession(session *TokenSession) error {
+	return c.refreshSession(session, true)
+}
+
+func (c *Client) refreshSession(session *TokenSession, forceGetSession bool) error {
 	if session == nil {
 		return fmt.Errorf("session is required")
 	}
 	session.refreshMu.Lock()
 	defer session.refreshMu.Unlock()
 
-	req, err := http.NewRequest("GET", SessionURL, nil)
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-	req.Close = true
-
-	// 发送完整 cookie 字符串，包含所有必要的 cookie
-	cookieStr := NormalizeCookie(session.CookieSnapshot())
-	req.Header.Set("Cookie", cookieStr)
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
-	req.Header.Set("Referer", "https://app.leonardo.ai/")
-	req.Header.Set("Origin", "https://app.leonardo.ai")
-	req.Header.Set("Sec-Fetch-Dest", "empty")
-	req.Header.Set("Sec-Fetch-Mode", "cors")
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	req.Header.Set("Sec-Ch-Ua", `"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"`)
-	req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
-	req.Header.Set("Sec-Ch-Ua-Platform", `"Windows"`)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("get-session request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != 200 {
-		return formatSessionHTTPError(resp.StatusCode, body)
-	}
-
-	// Better Auth may rotate the session token and/or sharded session_data
-	// cookies. Non-destructive rotations are persisted immediately so a response
-	// without a JWT can still recover on the next attempt. Deletions of critical
-	// session cookies are held until a valid JWT confirms the response, otherwise
-	// an upstream logout response could permanently replace a recoverable cookie
-	// with only unrelated cookies such as CF_Access_Token.
-	responseCookies := resp.Cookies()
-	updatedCookie := mergeResponseCookies(cookieStr, responseCookies)
-	deferCriticalDeletion := updatedCookie != cookieStr && deletesCriticalSessionCookie(responseCookies)
-	if updatedCookie != cookieStr && !deferCriticalDeletion {
-		session.mu.Lock()
-		session.FullCookie = updatedCookie
-		session.mu.Unlock()
-		session.notifyCookieRotated(updatedCookie)
-	}
-
-	// Parse response - Leonardo's get-session returns JSON with session info
-	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return fmt.Errorf("parse session response: %w (body: %s)", err, string(body[:min(len(body), 200)]))
-	}
-
-	// Try to extract token from various response structures
-	jwt := extractJWT(result)
-	if jwt == "" {
-		if deferCriticalDeletion {
-			log.Printf("[Leonardo] ignored critical session cookie deletion because get-session returned no JWT")
+	rawCookie := session.CookieSnapshot()
+	currentCookie, embeddedJWT := normalizeSessionCookieAndEmbeddedJWT(rawCookie)
+	if embeddedJWT != "" && !forceGetSession {
+		if err := applySessionJWT(session, embeddedJWT); err == nil && session.GetJWTRemainingSeconds() > int(embeddedJWTAcceptMargin.Seconds()) {
+			return nil
 		}
-		return fmt.Errorf("no JWT found in session response, body keys: %v", getKeys(result))
 	}
+	if strings.TrimSpace(currentCookie) == "" {
+		return fmt.Errorf("session cookie is empty")
+	}
+	if deduped, changed := dedupeCookieHeaderLastWins(currentCookie); changed {
+		currentCookie = deduped
+		session.mu.Lock()
+		session.FullCookie = currentCookie
+		session.mu.Unlock()
+		session.notifyCookieRotated(currentCookie)
+	}
+	latestCookie := currentCookie
+	var lastErr error
+	profiles := sessionHeaderProfiles()
 
-	// Parse the JWT to get expiry and user info
+	for attempt := 0; attempt < 2; attempt++ {
+		for profileIndex, headers := range profiles {
+			result, err := c.doSessionRefreshAttempt(currentCookie, headers)
+			if err != nil {
+				lastErr = fmt.Errorf("get-session request profile=%d: %w", profileIndex+1, err)
+				continue
+			}
+
+			updatedCookie := mergeResponseCookies(currentCookie, result.cookies)
+			deferCriticalDeletion := updatedCookie != currentCookie && deletesCriticalSessionCookie(result.cookies)
+			if strings.TrimSpace(updatedCookie) != "" {
+				latestCookie = updatedCookie
+			}
+			if updatedCookie != currentCookie && !deferCriticalDeletion {
+				session.mu.Lock()
+				session.FullCookie = updatedCookie
+				session.mu.Unlock()
+				session.notifyCookieRotated(updatedCookie)
+			}
+
+			if result.statusCode != 200 {
+				mitigated := strings.TrimSpace(result.header.Get("x-vercel-mitigated"))
+				vercelID := strings.TrimSpace(result.header.Get("x-vercel-id"))
+				if mitigated != "" || result.statusCode == http.StatusTooManyRequests || looksLikeHTML(result.body) {
+					lastErr = fmt.Errorf("get-session HTTP %d profile=%d mitigated=%s vercel=%s", result.statusCode, profileIndex+1, mitigated, vercelID)
+					if mitigated != "" || result.statusCode == http.StatusTooManyRequests {
+						return lastErr
+					}
+					continue
+				}
+				return formatSessionHTTPError(result.statusCode, result.body)
+			}
+
+			if len(result.body) == 0 {
+				lastErr = fmt.Errorf("empty get-session response profile=%d", profileIndex+1)
+				continue
+			}
+
+			var data map[string]interface{}
+			if err := json.Unmarshal(result.body, &data); err != nil {
+				lastErr = fmt.Errorf("parse session response profile=%d: %w (body: %s)", profileIndex+1, err, string(result.body[:min(len(result.body), 200)]))
+				continue
+			}
+
+			jwt := extractJWT(data)
+			if jwt == "" {
+				if deferCriticalDeletion {
+					log.Printf("[Leonardo] ignored critical session cookie deletion because get-session returned no JWT")
+				}
+				lastErr = fmt.Errorf("no JWT found profile=%d, body keys: %v", profileIndex+1, getKeys(data))
+				continue
+			}
+
+			if deferCriticalDeletion {
+				session.mu.Lock()
+				session.FullCookie = updatedCookie
+				session.mu.Unlock()
+				session.notifyCookieRotated(updatedCookie)
+			}
+			if err := applySessionJWT(session, jwt); err != nil {
+				lastErr = fmt.Errorf("parse JWT profile=%d: %w", profileIndex+1, err)
+				continue
+			}
+			log.Printf("[Leonardo] JWT refreshed for %s, expires %s, user=%s, profile=%d",
+				session.Email, session.JWTExpiry.Format(time.RFC3339), session.HasuraUserID, profileIndex+1)
+			return nil
+		}
+		if attempt == 0 && latestCookie != currentCookie {
+			currentCookie = latestCookie
+			continue
+		}
+		break
+	}
+	if latestCookie != currentCookie {
+		session.mu.Lock()
+		session.FullCookie = latestCookie
+		session.mu.Unlock()
+		session.notifyCookieRotated(latestCookie)
+	}
+	if lastErr != nil {
+		if strings.Contains(strings.ToLower(lastErr.Error()), "no jwt") {
+			if deduped, changed := dedupeCookieHeaderLastWins(latestCookie); changed {
+				session.mu.Lock()
+				session.FullCookie = deduped
+				session.mu.Unlock()
+				session.notifyCookieRotated(deduped)
+				return fmt.Errorf("no JWT found after cookie last-wins retry: %w", lastErr)
+			}
+		}
+		return lastErr
+	}
+	return fmt.Errorf("get-session returned no JWT after fingerprint attempts")
+}
+
+func dedupeCookieHeaderLastWins(cookiePayload string) (string, bool) {
+	parts := strings.Split(cookiePayload, ";")
+	seen := make(map[string]struct{}, len(parts))
+	reversed := make([]string, 0, len(parts))
+	changed := false
+	for i := len(parts) - 1; i >= 0; i-- {
+		part := strings.TrimSpace(parts[i])
+		if part == "" {
+			continue
+		}
+		name, _, ok := strings.Cut(part, "=")
+		if !ok || strings.TrimSpace(name) == "" {
+			reversed = append(reversed, part)
+			continue
+		}
+		name = strings.TrimSpace(name)
+		key := strings.ToLower(name)
+		if _, exists := seen[key]; exists {
+			changed = true
+			continue
+		}
+		seen[key] = struct{}{}
+		reversed = append(reversed, part)
+	}
+	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+		reversed[i], reversed[j] = reversed[j], reversed[i]
+	}
+	return strings.Join(reversed, "; "), changed
+}
+
+func normalizeSessionCookieAndEmbeddedJWT(raw string) (string, string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", ""
+	}
+	embeddedJWT := extractEmbeddedJWT(raw)
+	cookie := raw
+	for _, marker := range []string{"\r\ntoken=", "\ntoken=", "\r\naccessToken=", "\naccessToken=", "\r\naccess_token=", "\naccess_token="} {
+		if idx := strings.Index(cookie, marker); idx >= 0 {
+			cookie = cookie[:idx]
+			break
+		}
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(cookie)), "cookie=") {
+		cookie = strings.TrimSpace(cookie)[len("cookie="):]
+	}
+	return NormalizeCookie(cookie), embeddedJWT
+}
+
+func extractEmbeddedJWT(raw string) string {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ';' || r == '\n' || r == '\r' || r == '\t'
+	})
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(field, "=")
+		if ok {
+			key = strings.ToLower(strings.TrimSpace(key))
+			if key != "token" && key != "accesstoken" && key != "access_token" && key != "jwt" {
+				continue
+			}
+			value = strings.Trim(strings.TrimSpace(value), `"'`)
+			if decoded, err := url.QueryUnescape(value); err == nil {
+				value = decoded
+			}
+			if looksLikeJWTString(value) {
+				return value
+			}
+			continue
+		}
+		if looksLikeJWTString(field) {
+			return field
+		}
+	}
+	return ""
+}
+
+func looksLikeJWTString(token string) bool {
+	return strings.Count(token, ".") == 2 && len(token) > 80
+}
+
+func applySessionJWT(session *TokenSession, jwt string) error {
 	claims, err := parseJWT(jwt)
 	if err != nil {
-		return fmt.Errorf("parse JWT: %w", err)
+		return err
 	}
-	if deferCriticalDeletion {
-		session.mu.Lock()
-		session.FullCookie = updatedCookie
-		session.mu.Unlock()
-		session.notifyCookieRotated(updatedCookie)
-	}
-
 	session.mu.Lock()
 	defer session.mu.Unlock()
-
 	session.JWT = jwt
 	session.JWTExpiry = time.Unix(claims.Exp, 0)
 	session.CognitoSub = claims.Sub
 	session.Email = claims.Email
 	session.LastRefreshed = time.Now()
-
-	// Extract Hasura user ID
 	if claims.HasuraClaims != "" {
 		if hc, err := parseHasuraClaims(claims.HasuraClaims); err == nil {
 			session.HasuraUserID = hc.UserID
 		}
 	}
-
-	log.Printf("[Leonardo] JWT refreshed for %s, expires %s, user=%s",
-		session.Email, session.JWTExpiry.Format(time.RFC3339), session.HasuraUserID)
-
 	return nil
+}
+
+type sessionRefreshHTTPResult struct {
+	statusCode int
+	header     http.Header
+	cookies    []*http.Cookie
+	body       []byte
+}
+
+func doSessionRefreshAttemptWithReqClient(client *req.Client, cookieStr string, headers map[string]string) (*sessionRefreshHTTPResult, error) {
+	if client == nil {
+		return nil, fmt.Errorf("session impersonator client is nil")
+	}
+	req := client.R().SetHeader("cookie", cookieStr)
+	for k, v := range headers {
+		req.SetHeader(k, v)
+	}
+	resp, err := req.Get(SessionURL)
+	if err != nil {
+		return nil, err
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	return &sessionRefreshHTTPResult{
+		statusCode: resp.StatusCode,
+		header:     resp.Header,
+		cookies:    resp.Cookies(),
+		body:       body,
+	}, nil
+}
+
+func (c *Client) doSessionRefreshAttempt(cookieStr string, headers map[string]string) (*sessionRefreshHTTPResult, error) {
+	if c != nil && c.sessionImpersonatorClient != nil && c.httpClient == c.defaultHTTPClient {
+		result, err := doSessionRefreshAttemptWithReqClient(c.sessionImpersonatorClient, cookieStr, headers)
+		if err != nil && strings.TrimSpace(c.proxy) != "" && isProxyConnectionError(err) && c.directSessionImpersonatorClient != nil {
+			log.Printf("[Leonardo] get-session proxy path failed, retrying direct: %v", err)
+			return doSessionRefreshAttemptWithReqClient(c.directSessionImpersonatorClient, cookieStr, headers)
+		}
+		return result, err
+	}
+
+	req, err := http.NewRequest("GET", SessionURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Close = true
+	req.Header.Set("Cookie", cookieStr)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	client := c.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return &sessionRefreshHTTPResult{
+		statusCode: resp.StatusCode,
+		header:     resp.Header,
+		cookies:    resp.Cookies(),
+		body:       body,
+	}, nil
+}
+
+func sessionHeaderProfiles() []map[string]string {
+	base := map[string]string{
+		"Accept-Language":    "en-US,en;q=0.9",
+		"Origin":             "https://app.leonardo.ai",
+		"Referer":            "https://app.leonardo.ai/",
+		"Sec-Fetch-Dest":     "empty",
+		"Sec-Fetch-Mode":     "cors",
+		"Sec-Fetch-Site":     "same-origin",
+		"Sec-Ch-Ua-Mobile":   "?0",
+		"Sec-Ch-Ua-Platform": `"Windows"`,
+	}
+	clone := func(extra map[string]string) map[string]string {
+		out := make(map[string]string, len(base)+len(extra))
+		for k, v := range base {
+			out[k] = v
+		}
+		for k, v := range extra {
+			out[k] = v
+		}
+		return out
+	}
+	return []map[string]string{
+		clone(map[string]string{
+			"Accept":                 "*/*",
+			"User-Agent":             defaultUserAgent,
+			"Sec-Ch-Ua":              `"Not_A Brand";v="99", "Google Chrome";v="109", "Chromium";v="109"`,
+			"Sec-Ch-Ua-Full-Version": `"109.0.0.0"`,
+			"Priority":               "u=1, i",
+		}),
+		clone(map[string]string{
+			"Accept":                 "application/json, text/plain, */*",
+			"User-Agent":             defaultUserAgent,
+			"Sec-Ch-Ua":              `"Not_A Brand";v="99", "Google Chrome";v="109", "Chromium";v="109"`,
+			"Sec-Ch-Ua-Full-Version": `"109.0.0.0"`,
+			"Cache-Control":          "no-cache",
+			"Pragma":                 "no-cache",
+			"Priority":               "u=1, i",
+		}),
+		clone(map[string]string{
+			"Accept":                 "*/*",
+			"User-Agent":             defaultUserAgent,
+			"Sec-Ch-Ua":              `"Not_A Brand";v="99", "Chromium";v="109", "Google Chrome";v="109"`,
+			"Sec-Ch-Ua-Full-Version": `"109.0.0.0"`,
+			"Cache-Control":          "max-age=0",
+			"Priority":               "u=1, i",
+		}),
+	}
+}
+
+func looksLikeHTML(body []byte) bool {
+	snippet := strings.ToLower(strings.TrimSpace(string(body[:min(len(body), 200)])))
+	return strings.HasPrefix(snippet, "<!doctype html") || strings.HasPrefix(snippet, "<html")
 }
 
 func formatSessionHTTPError(statusCode int, body []byte) error {
@@ -636,6 +968,17 @@ func (s *TokenSession) GetJWTRemainingSeconds() int {
 	return int(remaining)
 }
 
+// SetJWTExpiryForTest adjusts the cached JWT expiry timestamp. It is used by
+// the admin verification endpoint to exercise the normal EnsureValidJWT refresh path.
+func (s *TokenSession) SetJWTExpiryForTest(expiry time.Time) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.JWTExpiry = expiry
+}
+
 // ──────────────────────────────────────────────────────────
 // Credits Query via GraphQL
 // ──────────────────────────────────────────────────────────
@@ -680,36 +1023,9 @@ func (c *Client) QueryCredits(session *TokenSession) (*Credits, error) {
 		Query:         getTokensQuery,
 	}
 
-	reqBody, err := json.Marshal(gqlReq)
+	body, err := c.doGraphQL(jwt, gqlReq)
 	if err != nil {
 		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", GraphQLURL, strings.NewReader(string(reqBody)))
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Authorization", "Bearer "+jwt)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Origin", "https://app.leonardo.ai")
-	req.Header.Set("Referer", "https://app.leonardo.ai/")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("graphql request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("graphql returned %d: %s", resp.StatusCode, string(body[:min(len(body), 300)]))
 	}
 
 	// Parse response
@@ -1028,7 +1344,23 @@ func isAllowedSeedance480pSize(width int, height int) bool {
 
 // doGraphQL sends a GraphQL request and returns the raw response body.
 func (c *Client) doGraphQL(jwt string, gqlReq graphqlRequest) ([]byte, error) {
-	return c.doGraphQLWithClient(c.httpClient, jwt, gqlReq)
+	body, err := c.doGraphQLWithClient(c.httpClient, jwt, gqlReq)
+	if err != nil && c != nil && c.directHTTPClient != nil && strings.TrimSpace(c.proxy) != "" && isProxyConnectionError(err) {
+		log.Printf("[Leonardo] GraphQL proxy path failed, retrying direct: %v", err)
+		return c.doGraphQLWithClient(c.directHTTPClient, jwt, gqlReq)
+	}
+	return body, err
+}
+
+func isProxyConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "proxyconnect") ||
+		strings.Contains(msg, "127.0.0.1:7890") ||
+		strings.Contains(msg, "actively refused") ||
+		strings.Contains(msg, "connection refused")
 }
 
 func (c *Client) doGraphQLWithClient(client *http.Client, jwt string, gqlReq graphqlRequest) ([]byte, error) {

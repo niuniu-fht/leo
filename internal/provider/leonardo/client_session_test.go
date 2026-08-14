@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRefreshSessionPersistsRotatedCookieBeforeJWTValidation(t *testing.T) {
@@ -146,5 +147,40 @@ func TestDeletesCriticalSessionCookieUsesFinalResponseAction(t *testing.T) {
 	}
 	if !deletesCriticalSessionCookie(replaceThenDelete) {
 		t.Fatal("final deletion should be treated as destructive")
+	}
+}
+
+func TestRefreshSessionUsesFreshEmbeddedTokenBeforeProtocolRefresh(t *testing.T) {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"sub":"user-1","email":"user@example.com","exp":%d}`, time.Now().Add(3*time.Minute).Unix())))
+	jwt := "eyJhbGciOiJub25lIn0." + payload + ".signature"
+	client := NewClient("")
+	client.SetJWTRefreshMarginMinutes(5)
+	client.httpClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			t.Fatal("embedded token should be used before get-session")
+			return nil, nil
+		}),
+	}
+	session := &TokenSession{
+		FullCookie: "__Secure-better-auth.session_token=session; __Secure-better-auth.session_data.0=data\ntoken=" + jwt,
+	}
+	if err := client.RefreshSession(session); err != nil {
+		t.Fatalf("RefreshSession() error = %v", err)
+	}
+	if session.JWT != jwt {
+		t.Fatalf("JWT = %q, want embedded token", session.JWT)
+	}
+	if session.Email != "user@example.com" {
+		t.Fatalf("Email = %q", session.Email)
+	}
+}
+
+func TestDedupeCookieHeaderLastWins(t *testing.T) {
+	got, changed := dedupeCookieHeaderLastWins("a=old; b=1; a=new; c=3")
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+	if got != "b=1; a=new; c=3" {
+		t.Fatalf("cookie = %q", got)
 	}
 }

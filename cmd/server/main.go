@@ -142,6 +142,8 @@ func main() {
 		switch {
 		case strings.HasSuffix(path, "/status") && (r.Method == "PUT" || r.Method == "PATCH"):
 			srv.HandleTokenStatus(w, r)
+		case strings.HasSuffix(path, "/refresh-expiry-test") && r.Method == "POST":
+			srv.HandleTokenRefreshExpiryTest(w, r)
 		case strings.HasSuffix(path, "/refresh") && r.Method == "POST":
 			srv.HandleTokenRefresh(w, r)
 		case strings.HasSuffix(path, "/auto-refresh") && r.Method == "PUT":

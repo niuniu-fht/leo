@@ -5,6 +5,101 @@ import (
 	"testing"
 )
 
+func TestImageQualityForModelID(t *testing.T) {
+	tests := []struct {
+		model string
+		want  string
+	}{
+		{model: "", want: "low"},
+		{model: "gpt-image-2", want: "low"},
+		{model: "gpt-image-2-high", want: "medium"},
+		{model: "gpt-image-2-higher", want: "high"},
+		{model: "banana2", want: "medium"},
+		{model: "nano-banana-2", want: "medium"},
+		{model: "bananapro", want: "high"},
+		{model: "banana-pro", want: "high"},
+		{model: "nano-banana-pro", want: "high"},
+	}
+	for _, tt := range tests {
+		got, known := imageQualityForModelID(tt.model)
+		if !known {
+			t.Fatalf("imageQualityForModelID(%q) known = false, want true", tt.model)
+		}
+		if got != tt.want {
+			t.Fatalf("imageQualityForModelID(%q) = %q, want %q", tt.model, got, tt.want)
+		}
+	}
+}
+
+func TestResolveImageGenerationModelAliases(t *testing.T) {
+	s := &Server{}
+	tests := []struct {
+		input             string
+		wantPublic        string
+		wantUpstreamModel string
+		wantRequestModel  string
+		wantQuality       string
+	}{
+		{input: "gpt-image-2", wantPublic: "gpt-image-2", wantUpstreamModel: "135b2740-a20b-48c8-8f86-6f68199e06c5", wantRequestModel: "gpt-image-2", wantQuality: "low"},
+		{input: "banana2", wantPublic: "banana2", wantUpstreamModel: "7418e71f-4133-4e1b-9895-bee19f48f2ce", wantRequestModel: "nano-banana-2", wantQuality: "medium"},
+		{input: "bananapro", wantPublic: "bananapro", wantUpstreamModel: "7c02ef35-3a6b-4df6-b78d-873e5032c3b4", wantRequestModel: "nano-banana-2", wantQuality: "high"},
+	}
+	for _, tt := range tests {
+		public, upstream, requestModel, quality := s.resolveImageGenerationModel(tt.input)
+		if public != tt.wantPublic || upstream != tt.wantUpstreamModel || requestModel != tt.wantRequestModel || quality != tt.wantQuality {
+			t.Fatalf("resolveImageGenerationModel(%q) = %q %q %q %q; want %q %q %q %q", tt.input, public, upstream, requestModel, quality, tt.wantPublic, tt.wantUpstreamModel, tt.wantRequestModel, tt.wantQuality)
+		}
+	}
+}
+
+func TestResolveOpenAIImageSize(t *testing.T) {
+	tests := []struct {
+		size        string
+		aspectRatio string
+		wantWidth   int
+		wantHeight  int
+		wantLabel   string
+	}{
+		{size: "", aspectRatio: "", wantWidth: 1536, wantHeight: 1536, wantLabel: "1536x1536"},
+		{size: "1024x1024", aspectRatio: "", wantWidth: 1024, wantHeight: 1024, wantLabel: "1024x1024"},
+		{size: "2752x1536", aspectRatio: "", wantWidth: 2752, wantHeight: 1536, wantLabel: "2752x1536"},
+		{size: "", aspectRatio: "9:16", wantWidth: 1536, wantHeight: 2752, wantLabel: "1536x2752"},
+		{size: "1234x567", aspectRatio: "", wantWidth: 1234, wantHeight: 567, wantLabel: "1234x567"},
+	}
+	for _, tt := range tests {
+		width, height, label, err := resolveOpenAIImageSize(tt.size, tt.aspectRatio)
+		if err != nil {
+			t.Fatalf("resolveOpenAIImageSize(%q, %q) error = %v", tt.size, tt.aspectRatio, err)
+		}
+		if width != tt.wantWidth || height != tt.wantHeight || label != tt.wantLabel {
+			t.Fatalf("resolveOpenAIImageSize(%q, %q) = %dx%d %q, want %dx%d %q", tt.size, tt.aspectRatio, width, height, label, tt.wantWidth, tt.wantHeight, tt.wantLabel)
+		}
+	}
+}
+
+func TestOpenAIImageReferenceURLs(t *testing.T) {
+	req := openAIImageGenerationRequest{
+		ImageURL:     " https://example.com/a.png ",
+		ImageURLs:    []string{"https://example.com/b.png", "https://example.com/a.png", "", "https://example.com/c.png"},
+		ImageBase64s: []string{"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA"},
+		Images: []openAIImageReferenceInput{
+			{ImageURL: "https://example.com/d.png"},
+			{URL: "https://example.com/e.png"},
+			{ImageBase64: "/9j/4AAQSkZJRgABAQAAAQABAAD"},
+		},
+	}
+	got := req.referenceURLs()
+	want := []string{"https://example.com/a.png", "https://example.com/b.png", "https://example.com/c.png", "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA"}
+	if len(got) != len(want) {
+		t.Fatalf("referenceURLs len = %d, want %d: %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("referenceURLs[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestNormalizeVideoModelIDSupportsSora2(t *testing.T) {
 	modelID, ok := normalizeVideoModelID("sora2")
 	if !ok {

@@ -428,12 +428,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       const refreshTokenBtn = canRefresh
         ? `<button class="action-mini" onclick="refreshToken('${t.id}')">刷新Token</button>`
         : `<button class="action-mini" disabled title="仅自动刷新 token 支持刷新">刷新Token</button>`;
+      const expiryRefreshTestBtn = canRefresh
+        ? `<button class="action-mini" onclick="testTokenExpiryRefresh('${t.id}')" title="把内存 JWT 临时压到 30 秒后，再走正式刷新链路">模拟到期刷新</button>`
+        : `<button class="action-mini" disabled title="仅 Leonardo token 支持测试">模拟到期刷新</button>`;
       const statusBtn = isFrozen
         ? `<button class="action-mini" disabled title="额度耗尽、已失效或异常 token 不可启用">不可启用</button>`
         : `<button class="action-mini" onclick="toggleToken('${t.id}', '${isStatusActive ? 'disabled' : 'active'}')">${isStatusActive ? '禁用Token' : '启用Token'}</button>`;
       const actionsGrid = `
         <div class="action-btns">
           ${refreshTokenBtn}
+          ${expiryRefreshTestBtn}
           ${statusBtn}
           <button class="action-mini danger" onclick="deleteToken('${t.id}')">删除Token</button>
         </div>
@@ -712,6 +716,32 @@ document.addEventListener("DOMContentLoaded", async () => {
       await loadTokens();
     } catch (err) {
       showToast("Token 刷新失败: " + (err.message || "网络错误"), true);
+    }
+  };
+
+
+  window.testTokenExpiryRefresh = async (id) => {
+    showToast("正在模拟 JWT 即将到期并刷新...", false, { duration: 0 });
+    try {
+      const res = await fetch(`/api/v1/tokens/${id}/refresh-expiry-test`, { method: "POST" });
+      const data = await res.json().catch(async () => ({ detail: await res.text() }));
+      if (!res.ok || !data.ok) {
+        showToast(`模拟到期刷新失败：${data.detail || JSON.stringify(data)}`, true);
+        await loadTokens();
+        return;
+      }
+      const before = Number(data.before_remaining || 0);
+      const forced = Number(data.forced_remaining || 0);
+      const after = Number(data.after_remaining || 0);
+      const beforeMin = Math.floor(before / 60);
+      const afterMin = Math.floor(after / 60);
+      let msg = `模拟到期刷新成功：原剩余 ${beforeMin} 分钟，压到 ${forced} 秒，刷新后剩余 ${afterMin} 分钟`;
+      if (data.email) msg += `，账号 ${data.email}`;
+      if (data.credits_available != null) msg += `，积分 ${data.credits_available}`;
+      showToast(msg, false, { duration: 8000 });
+      await loadTokens();
+    } catch (err) {
+      showToast("模拟到期刷新失败: " + (err.message || "网络错误"), true);
     }
   };
 
@@ -1152,6 +1182,24 @@ document.addEventListener("DOMContentLoaded", async () => {
   let logsTotalPages = 1;
   let logsRunningTotal = 0;
 
+  function isSupportedProxyInput(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return false;
+    if (/^https?:\/\//i.test(raw)) {
+      try {
+        const parsed = new URL(raw);
+        return !!parsed.hostname && !!parsed.port;
+      } catch (_) {
+        return false;
+      }
+    }
+    if (/^[^@\s:]+:[^@\s]+@[^/\s:]+:\d+$/i.test(raw)) return true;
+    const parts = raw.split(":");
+    if (parts.length === 2 && parts[0] && /^\d+$/.test(parts[1])) return true;
+    if (parts.length >= 4 && parts[0] && /^\d+$/.test(parts[1]) && parts[2]) return true;
+    return false;
+  }
+
   const refreshThresholdLabel = document.querySelector('label[for="confRefreshIntervalMinutes"]');
   if (refreshThresholdLabel) {
     refreshThresholdLabel.textContent = "自动刷新触发阈值 (分钟)";
@@ -1433,17 +1481,17 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (payload.generated_prune_size_mb >= payload.generated_max_size_mb) {
         throw new Error("触发后清理量必须小于生成文件空间上限");
       }
-      if (payload.use_proxy && !/^https?:\/\//i.test(payload.proxy)) {
-        throw new Error("基础代理地址必须以 http:// 或 https:// 开头");
+      if (payload.use_proxy && !isSupportedProxyInput(payload.proxy)) {
+        throw new Error("基础代理地址支持 http://user:pass@host:port 或 host:port:user:pass");
       }
-      if (payload.resource_use_proxy && !/^https?:\/\//i.test(payload.resource_proxy)) {
-        throw new Error("资源代理地址必须以 http:// 或 https:// 开头");
+      if (payload.resource_use_proxy && !isSupportedProxyInput(payload.resource_proxy)) {
+        throw new Error("资源代理地址支持 http://user:pass@host:port 或 host:port:user:pass");
       }
       if (!["basic", "direct", "custom"].includes(payload.leonardo_upload_proxy_mode)) {
         throw new Error("Leonardo 上传代理策略无效");
       }
-      if (payload.leonardo_upload_proxy_mode === "custom" && !/^https?:\/\//i.test(payload.leonardo_upload_proxy)) {
-        throw new Error("Leonardo 上传代理地址必须以 http:// 或 https:// 开头");
+      if (payload.leonardo_upload_proxy_mode === "custom" && !isSupportedProxyInput(payload.leonardo_upload_proxy)) {
+        throw new Error("Leonardo 上传代理地址支持 http://user:pass@host:port 或 host:port:user:pass");
       }
       if (!Number.isInteger(payload.retry_max_attempts) || payload.retry_max_attempts < 1 || payload.retry_max_attempts > 10) {
         throw new Error("最大尝试次数必须是 1-10 的整数");
@@ -1585,11 +1633,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       resource_use_proxy: confResourceUseProxy.checked,
       resource_proxy: confResourceProxy.value.trim(),
     };
-    if (payload.use_proxy && !/^https?:\/\//i.test(payload.proxy)) {
-      throw new Error("基础代理地址必须以 http:// 或 https:// 开头");
+    if (payload.use_proxy && !isSupportedProxyInput(payload.proxy)) {
+      throw new Error("基础代理地址支持 http://user:pass@host:port 或 host:port:user:pass");
     }
-    if (payload.resource_use_proxy && !/^https?:\/\//i.test(payload.resource_proxy)) {
-      throw new Error("资源代理地址必须以 http:// 或 https:// 开头");
+    if (payload.resource_use_proxy && !isSupportedProxyInput(payload.resource_proxy)) {
+      throw new Error("资源代理地址支持 http://user:pass@host:port 或 host:port:user:pass");
     }
     const res = await fetch("/api/v1/proxy/test", {
       method: "POST",
@@ -1766,8 +1814,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       return pairs.join("; ");
     }
     if (value && typeof value === "object") {
-      if (Array.isArray(value.cookies)) return cookieToHeaderString(value.cookies);
-      if (value.cookie != null) return cookieToHeaderString(value.cookie);
+      const token = String(value.accessToken || value.access_token || value.token || value.idToken || value.id_token || value.jwt || "").trim();
+      let cookie = "";
+      if (Array.isArray(value.cookies)) cookie = cookieToHeaderString(value.cookies);
+      else if (value.cookie != null) cookie = cookieToHeaderString(value.cookie);
+      if (cookie && token && !cookie.includes("\ntoken=") && !cookie.includes("\naccessToken=")) {
+        cookie += `\ntoken=${token}`;
+      }
+      if (cookie) return cookie;
     }
     return "";
   }
