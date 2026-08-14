@@ -142,6 +142,36 @@ body {
 
 /* ── Logs ───────────────────────────────── */
 .log-row-running td { background: rgba(51, 161, 255, 0.05) !important; }
+.log-type-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 54px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+  white-space: nowrap;
+  border: 1px solid rgba(127, 150, 173, 0.28);
+  background: rgba(127, 150, 173, 0.12);
+  color: var(--leo-muted);
+}
+.log-type-badge.image-text {
+  background: rgba(51, 161, 255, 0.14);
+  color: #7cc0ff;
+  border-color: rgba(51, 161, 255, 0.34);
+}
+.log-type-badge.image-ref {
+  background: rgba(44, 199, 170, 0.14);
+  color: #4de2c4;
+  border-color: rgba(44, 199, 170, 0.34);
+}
+.log-type-badge.video {
+  background: rgba(240, 192, 64, 0.12);
+  color: #ffca58;
+  border-color: rgba(240, 192, 64, 0.3);
+}
 .log-state-btn {
   background: rgba(44, 199, 170, 0.12);
   color: #4de2c4;

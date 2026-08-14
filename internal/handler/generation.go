@@ -451,6 +451,14 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 	startTime := time.Now()
 	uploadCache := make(map[string]string)
 	refURLs := payload.referenceURLs()
+	imageInputMode := "text_to_image"
+	if len(refURLs) > 0 {
+		imageInputMode = "image_to_image"
+	}
+	imageOperation := "images.generations"
+	if strings.Contains(strings.ToLower(r.URL.Path), "/v1/images/edits") {
+		imageOperation = "images.edits"
+	}
 	initImageIDs := make([]string, 0, len(refURLs))
 	for idx, refURL := range refURLs {
 		imageID, err := s.resolveLeonardoImageID(session, "", refURL, uploadCache)
@@ -459,7 +467,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			if payload.ImageURL != "" && idx == 0 {
 				msg = fmt.Sprintf("invalid image_url: %v", err)
 			}
-			s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, usedTokenID, session, time.Since(startTime).Seconds(), 400, msg)
+			s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, imageInputMode, imageOperation, usedTokenID, session, time.Since(startTime).Seconds(), 400, msg)
 			writeJSON(w, 400, errorResp(msg, "invalid_request_error"))
 			return
 		}
@@ -496,7 +504,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			s.TokenMgr.ReportFail(usedTokenID)
 		}
 		msg := fmt.Sprintf("image generation failed: %v", err)
-		s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, usedTokenID, session, time.Since(startTime).Seconds(), statusCode, msg)
+		s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, imageInputMode, imageOperation, usedTokenID, session, time.Since(startTime).Seconds(), statusCode, msg)
 		writeJSON(w, statusCode, errorResp(msg, "server_error"))
 		return
 	}
@@ -509,6 +517,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			StatusCode:           200,
 			TaskStatus:           "IN_PROGRESS",
 			Type:                 "image",
+			InputMode:            imageInputMode,
 			TokenID:              usedTokenID,
 			TokenAttempt:         1,
 			AccountName:          accountName,
@@ -519,7 +528,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			GenerationID:         result.GenerationID,
 			UpstreamGenerationID: result.GenerationID,
 			CreditCost:           result.APICreditCost,
-			Operation:            "leonardo.image.generate",
+			Operation:            imageOperation,
 		})
 	}
 	// After Leonardo accepts the image generation and the IN_PROGRESS log is
@@ -1353,9 +1362,15 @@ func (s *Server) resolveImageGenerationModel(model string) (publicModelID string
 	return publicModelID, upstreamModelID, requestModel, quality
 }
 
-func (s *Server) logImageRequestFailure(prompt, modelID, quality, sizeLabel, tokenID string, session *leonardo.TokenSession, durationSec float64, statusCode int, errorMessage string) {
+func (s *Server) logImageRequestFailure(prompt, modelID, quality, sizeLabel, inputMode, operation, tokenID string, session *leonardo.TokenSession, durationSec float64, statusCode int, errorMessage string) {
 	if s == nil || s.ReqLog == nil {
 		return
+	}
+	if strings.TrimSpace(inputMode) == "" {
+		inputMode = "text_to_image"
+	}
+	if strings.TrimSpace(operation) == "" {
+		operation = "images.generations"
 	}
 	accountName, accountEmail := s.resolveReqLogAccount(tokenID, session)
 	s.ReqLog.Add(reqlog.Entry{
@@ -1364,6 +1379,7 @@ func (s *Server) logImageRequestFailure(prompt, modelID, quality, sizeLabel, tok
 		StatusCode:   statusCode,
 		TaskStatus:   "FAILED",
 		Type:         "image",
+		InputMode:    inputMode,
 		TokenID:      tokenID,
 		TokenAttempt: 1,
 		AccountName:  accountName,
@@ -1374,7 +1390,7 @@ func (s *Server) logImageRequestFailure(prompt, modelID, quality, sizeLabel, tok
 		ErrorCode:    strconv.Itoa(statusCode),
 		ErrorMessage: errorMessage,
 		DurationSec:  durationSec,
-		Operation:    "leonardo.image.generate",
+		Operation:    operation,
 	})
 }
 
