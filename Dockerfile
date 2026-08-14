@@ -1,4 +1,4 @@
-FROM golang:1.23-alpine AS builder
+FROM golang:1.25-alpine AS builder
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
@@ -13,3 +13,4 @@ COPY --from=builder /build/static ./static
 COPY --from=builder /build/config ./config
 EXPOSE 8787
 CMD ["./leo2api"]
+
