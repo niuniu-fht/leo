@@ -16,6 +16,7 @@ func TestImageQualityForModelID(t *testing.T) {
 		{model: "gpt-image-2", want: "low"},
 		{model: "gpt-image-2-high", want: "medium"},
 		{model: "gpt-image-2-higher", want: "high"},
+		{model: "gpt-image-2-clarity", want: "low"},
 		{model: "banana2", want: "medium"},
 		{model: "nano-banana-2", want: "medium"},
 		{model: "bananapro", want: "high"},
@@ -43,14 +44,36 @@ func TestResolveImageGenerationModelAliases(t *testing.T) {
 		wantQuality       string
 	}{
 		{input: "gpt-image-2", wantPublic: "gpt-image-2", wantUpstreamModel: "135b2740-a20b-48c8-8f86-6f68199e06c5", wantRequestModel: "gpt-image-2", wantQuality: "low"},
+		{input: "gpt-image-2-clarity", wantPublic: "gpt-image-2-clarity", wantUpstreamModel: "135b2740-a20b-48c8-8f86-6f68199e06c5", wantRequestModel: "gpt-image-2", wantQuality: "low"},
 		{input: "banana2", wantPublic: "banana2", wantUpstreamModel: "7418e71f-4133-4e1b-9895-bee19f48f2ce", wantRequestModel: "nano-banana-2", wantQuality: "medium"},
-		{input: "bananapro", wantPublic: "bananapro", wantUpstreamModel: "7c02ef35-3a6b-4df6-b78d-873e5032c3b4", wantRequestModel: "nano-banana-2", wantQuality: "high"},
+		{input: "bananapro", wantPublic: "bananapro", wantUpstreamModel: "7c02ef35-3a6b-4df6-b78d-873e5032c3b4", wantRequestModel: "gemini-image-2", wantQuality: "high"},
+		{input: "gpt-image-gemini-3.1-flash-image", wantPublic: "banana2", wantUpstreamModel: "7418e71f-4133-4e1b-9895-bee19f48f2ce", wantRequestModel: "nano-banana-2", wantQuality: "medium"},
+		{input: "gpt-image-gemini-3-pro-image", wantPublic: "bananapro", wantUpstreamModel: "7c02ef35-3a6b-4df6-b78d-873e5032c3b4", wantRequestModel: "gemini-image-2", wantQuality: "high"},
 	}
 	for _, tt := range tests {
 		public, upstream, requestModel, quality := s.resolveImageGenerationModel(tt.input)
 		if public != tt.wantPublic || upstream != tt.wantUpstreamModel || requestModel != tt.wantRequestModel || quality != tt.wantQuality {
 			t.Fatalf("resolveImageGenerationModel(%q) = %q %q %q %q; want %q %q %q %q", tt.input, public, upstream, requestModel, quality, tt.wantPublic, tt.wantUpstreamModel, tt.wantRequestModel, tt.wantQuality)
 		}
+	}
+}
+
+func TestBananaProUsesGeminiImage2NativeRequest(t *testing.T) {
+	if !imageUsesNativeRequest("bananapro") {
+		t.Fatal("bananapro should use native image request")
+	}
+	if !imageUsesGeminiImage2Request("bananapro", "gemini-image-2") {
+		t.Fatal("bananapro should use gemini-image-2 request settings")
+	}
+}
+
+func TestKnownImageAliasIgnoresGlobalRequestModel(t *testing.T) {
+	cfg := config.New()
+	cfg.Set("image_request_model", "nano-banana-2")
+	s := &Server{Config: cfg}
+	public, _, requestModel, quality := s.resolveImageGenerationModel("gpt-image-2-clarity")
+	if public != "gpt-image-2-clarity" || requestModel != "gpt-image-2" || quality != "low" {
+		t.Fatalf("clarity resolve = public=%q request=%q quality=%q; want clarity gpt-image-2 low", public, requestModel, quality)
 	}
 }
 
@@ -130,6 +153,46 @@ func TestResolveBananaImageSizeIgnoresGPT1KMode(t *testing.T) {
 	}
 	if width != 1536 || height != 1536 || label != "1536x1536" {
 		t.Fatalf("banana size = %dx%d %q, want 1536x1536", width, height, label)
+	}
+}
+
+func TestResolveBananaImageSizeSpecific1KMode(t *testing.T) {
+	cfg := config.New()
+	cfg.Set("image_size_mode_banana2", "1k")
+	s := &Server{Config: cfg}
+	width, height, label, err := s.resolveImageRequestSize("banana2", "1536x2752", "")
+	if err != nil {
+		t.Fatalf("resolveImageRequestSize banana 1k error = %v", err)
+	}
+	if width != 768 || height != 1376 || label != "768x1376" {
+		t.Fatalf("banana 1k size = %dx%d %q, want 768x1376", width, height, label)
+	}
+}
+
+func TestResolveImageSizeSpecificModeOverridesLegacyGPTMode(t *testing.T) {
+	cfg := config.New()
+	cfg.Set("gpt_image_size_mode", "1k")
+	cfg.Set("image_size_mode_gpt_image_2_high", "request")
+	s := &Server{Config: cfg}
+	width, height, label, err := s.resolveImageRequestSize("gpt-image-2-high", "1536x2752", "")
+	if err != nil {
+		t.Fatalf("resolveImageRequestSize high override error = %v", err)
+	}
+	if width != 1536 || height != 2752 || label != "1536x2752" {
+		t.Fatalf("gpt-image-2-high override size = %dx%d %q, want 1536x2752", width, height, label)
+	}
+}
+
+func TestResolveImageSizeDetailsTransform(t *testing.T) {
+	cfg := config.New()
+	cfg.Set("image_size_mode_bananapro", "1k")
+	s := &Server{Config: cfg}
+	info, err := s.resolveImageRequestSizeDetails("bananapro", "2048x1024", "")
+	if err != nil {
+		t.Fatalf("resolveImageRequestSizeDetails error = %v", err)
+	}
+	if info.Transform != "2048x1024（2:1）→ 1376x768（43:24）" {
+		t.Fatalf("transform = %q", info.Transform)
 	}
 }
 

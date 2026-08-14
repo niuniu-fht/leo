@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Leo2API 控制台</title>
   <link rel="stylesheet" href="/static/vendor/tabler/tabler.min.css" />
-  <link rel="stylesheet" href="/static/admin.css?v=20260815-1" />
+  <link rel="stylesheet" href="/static/admin.css?v=20260815-2" />
 </head>
 <body class="d-flex flex-column min-vh-100">
   <header class="navbar navbar-expand-md navbar-dark d-print-none leo-navbar">
@@ -177,6 +177,9 @@
                   <button class="nav-link config-cat-btn" type="button" data-target="cfg-image">图片生成</button>
                 </li>
                 <li class="nav-item" role="presentation">
+                  <button class="nav-link config-cat-btn" type="button" data-target="cfg-adobe">Adobe配置</button>
+                </li>
+                <li class="nav-item" role="presentation">
                   <button class="nav-link config-cat-btn" type="button" data-target="cfg-retry">重试与容错</button>
                 </li>
                 <li class="nav-item" role="presentation">
@@ -273,12 +276,66 @@
 
               <section id="cfg-image" class="config-cat-pane">
                 <div class="form-group mb-3">
-                  <label class="form-label" for="confGptImageSizeMode">GPT 图片比例默认设置</label>
+                  <label class="form-label" for="confGptImageSizeMode">gpt-image-2 是否开启 1k 大小 size</label>
                   <select id="confGptImageSizeMode" class="form-select input-select">
                     <option value="request">根据请求</option>
                     <option value="1k">1k</option>
                   </select>
-                  <p class="help text-secondary small mt-1">选择 1k 后，gpt-image-2 系列会先解析 size/aspect_ratio，匹配最接近的 1k 预设比例；无法识别的 size 自动使用 1024x1024。选择“根据请求”则保持用户请求尺寸。</p>
+                  <p class="help text-secondary small mt-1">选择 1k 后，会先解析 size/aspect_ratio，匹配最接近的 1k 预设比例；无法识别的 size 自动使用 1024x1024。选择“根据请求”则保持用户请求尺寸。</p>
+                </div>
+
+                <div class="config-inline-row d-flex flex-wrap gap-3 mb-3">
+                  <div class="form-group inline-item flex-grow-1" style="min-width:220px;">
+                    <label class="form-label" for="confImageSizeModeGptImage2High">gpt-image-2-high 是否开启 1k 大小 size</label>
+                    <select id="confImageSizeModeGptImage2High" class="form-select input-select">
+                      <option value="request">根据请求</option>
+                      <option value="1k">1k</option>
+                    </select>
+                  </div>
+                  <div class="form-group inline-item flex-grow-1" style="min-width:220px;">
+                    <label class="form-label" for="confImageSizeModeGptImage2Higher">gpt-image-2-higher 是否开启 1k 大小 size</label>
+                    <select id="confImageSizeModeGptImage2Higher" class="form-select input-select">
+                      <option value="request">根据请求</option>
+                      <option value="1k">1k</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="config-inline-row d-flex flex-wrap gap-3 mb-3">
+                  <div class="form-group inline-item flex-grow-1" style="min-width:220px;">
+                    <label class="form-label" for="confImageSizeModeBanana2">banana2 是否开启 1k 大小 size</label>
+                    <select id="confImageSizeModeBanana2" class="form-select input-select">
+                      <option value="request">根据请求</option>
+                      <option value="1k">1k</option>
+                    </select>
+                  </div>
+                  <div class="form-group inline-item flex-grow-1" style="min-width:220px;">
+                    <label class="form-label" for="confImageSizeModeBananaPro">bananapro 是否开启 1k 大小 size</label>
+                    <select id="confImageSizeModeBananaPro" class="form-select input-select">
+                      <option value="request">根据请求</option>
+                      <option value="1k">1k</option>
+                    </select>
+                  </div>
+                </div>
+              </section>
+
+              <section id="cfg-adobe" class="config-cat-pane">
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confAdobe2APIBaseUrl">Adobe2API 地址</label>
+                  <input type="text" id="confAdobe2APIBaseUrl" class="form-control input-text" placeholder="例如：http://adobe2api:6001/v1 或 https://adobe.example.com/v1" />
+                  <p class="help text-secondary small mt-1">用于 gpt-image-2-clarity：先走 gpt-image-2 低质量生图，再调用这里的 /v1/images/edits + gpt-image-2-clarity-free 转透明底。</p>
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confAdobe2APIApiKey">Adobe2API API Key</label>
+                  <input type="password" id="confAdobe2APIApiKey" class="form-control input-text" placeholder="Adobe2API 的服务 API Key" />
+                  <p class="help text-secondary small mt-1">保存后服务端请求 Adobe2API 时会同时带 Authorization: Bearer 与 X-API-Key。</p>
+                </div>
+
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confAdobe2APITimeoutSeconds">Adobe2API 超时 (秒)</label>
+                  <input type="number" id="confAdobe2APITimeoutSeconds" class="form-control input-text" min="1" max="1800" step="1" placeholder="默认 300" />
+                  <p class="help text-secondary small mt-1">透明底后处理的单张请求超时，默认 300 秒。</p>
                 </div>
               </section>
 
@@ -493,13 +550,14 @@
                     <th>进度</th>
                     <th>账号</th>
                     <th>模型/参数</th>
+                    <th>Size转换</th>
                     <th>提示词摘要</th>
                     <th>预览</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
-                    <td colspan="9" class="empty-state text-secondary text-center py-4">暂无日志</td>
+                    <td colspan="10" class="empty-state text-secondary text-center py-4">暂无日志</td>
                   </tr>
                 </tbody>
               </table>
@@ -651,6 +709,6 @@
   <div id="appToast" class="toast leo-toast" role="status" aria-live="polite"></div>
 
   <script src="/static/vendor/tabler/tabler.min.js"></script>
-  <script src="/static/admin.js?v=20260815-1"></script>
+  <script src="/static/admin.js?v=20260815-2"></script>
 </body>
 </html>

@@ -165,6 +165,7 @@ curl http://127.0.0.1:8787/v1/models \
 | `gpt-image-2` | 配置项 `image_model_id*` | - | `1536x1536` | - | 图片生成，固定 `quality=low` |
 | `gpt-image-2-high` | 配置项 `image_model_id*` | - | `1536x1536` | - | 图片生成，固定 `quality=medium` |
 | `gpt-image-2-higher` | 配置项 `image_model_id*` | - | `1536x1536` | - | 图片生成，固定 `quality=high` |
+| `gpt-image-2-clarity` | 配置项 `image_model_id*` + Adobe2API | - | `1536x1536` | - | 先用 `gpt-image-2` 低质量生图，再调用 Adobe2API 转透明底 |
 | `video-2.0` | `seedance-2.0` | 10 秒 | `1280x720` | 4–15 秒 | 图片、首尾帧、视频、音频 |
 | `video-2.0-fast` | `seedance-2.0-fast` | 10 秒 | `1280x720` | 4–15 秒 | 图片、首尾帧、视频、音频 |
 | `video-2.0-mini` | `seedance-2.0-mini` | 10 秒 | `1280x720` | 4–15 秒 | 图片、首尾帧、视频、音频 |
@@ -177,7 +178,7 @@ curl http://127.0.0.1:8787/v1/models \
 
 `size` 的格式统一为 `宽x高`。
 
-图片模型的质量由服务端按 `model` 固定映射：`gpt-image-2 -> low`，`gpt-image-2-high -> medium`，`gpt-image-2-higher -> high`。请求体里的 `quality` 字段会被忽略。
+图片模型的质量由服务端按 `model` 固定映射：`gpt-image-2 -> low`，`gpt-image-2-high -> medium`，`gpt-image-2-higher -> high`，`gpt-image-2-clarity -> low + Adobe2API 透明底后处理`。请求体里的 `quality` 字段会被忽略。
 
 ### 模型别名
 
@@ -725,6 +726,8 @@ config/config.json
   "proxy": "",
   "use_proxy": false,
   "image_request_model": "nano-banana-2",
+  "image_request_model_banana2": "gpt-image-gemini-3.1-flash-image",
+  "image_request_model_bananapro": "gpt-image-gemini-3-pro-image",
   "image_model_id": "",
   "image_model_id_gpt_image_2": "",
   "image_model_id_gpt_image_2_high": "",
@@ -755,7 +758,7 @@ config/config.json
 
 | 配置项 | 作用 |
 | --- | --- |
-| `image_request_model` | Leonardo `request.model`，默认 `nano-banana-2` |
+| `image_request_model` | 未知图片模型的 Leonardo `request.model`，默认 `nano-banana-2`；`banana2` 默认 `gpt-image-gemini-3.1-flash-image`，`bananapro` 默认 `gpt-image-gemini-3-pro-image` |
 | `image_model_id` | 三个公共图片模型共用的默认上游 `modelId` |
 | `image_model_id_gpt_image_2` | 覆盖 `gpt-image-2` 使用的上游 `modelId` |
 | `image_model_id_gpt_image_2_high` | 覆盖 `gpt-image-2-high` 使用的上游 `modelId` |

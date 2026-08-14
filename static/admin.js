@@ -1114,6 +1114,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   const confLeonardoUploadProxyMode = document.getElementById("confLeonardoUploadProxyMode");
   const confLeonardoUploadProxy = document.getElementById("confLeonardoUploadProxy");
   const confGptImageSizeMode = document.getElementById("confGptImageSizeMode");
+  const confImageSizeModeGptImage2High = document.getElementById("confImageSizeModeGptImage2High");
+  const confImageSizeModeGptImage2Higher = document.getElementById("confImageSizeModeGptImage2Higher");
+  const confImageSizeModeBanana2 = document.getElementById("confImageSizeModeBanana2");
+  const confImageSizeModeBananaPro = document.getElementById("confImageSizeModeBananaPro");
+  const confAdobe2APIBaseUrl = document.getElementById("confAdobe2APIBaseUrl");
+  const confAdobe2APIApiKey = document.getElementById("confAdobe2APIApiKey");
+  const confAdobe2APITimeoutSeconds = document.getElementById("confAdobe2APITimeoutSeconds");
   const testProxyBtn = document.getElementById("testProxyBtn");
   const proxyTestResult = document.getElementById("proxyTestResult");
   const confGenerateTimeout = document.getElementById("confGenerateTimeout");
@@ -1299,6 +1306,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
+  function normalizeImageSizeModeValue(value, fallback = "request") {
+    const raw = String(value || fallback || "request").trim().toLowerCase();
+    return raw === "1k" ? "1k" : "request";
+  }
+
   configCatBtns.forEach((btn) => {
     btn.addEventListener("click", () => {
       switchConfigPane(String(btn.dataset.target || ""));
@@ -1333,8 +1345,30 @@ document.addEventListener("DOMContentLoaded", async () => {
         confLeonardoUploadProxyMode.value = String(data.leonardo_upload_proxy_mode || "basic");
         confLeonardoUploadProxy.value = data.leonardo_upload_proxy || "";
         if (confGptImageSizeMode) {
-          const imageSizeMode = String(data.gpt_image_size_mode || "request").trim().toLowerCase();
-          confGptImageSizeMode.value = imageSizeMode === "1k" ? "1k" : "request";
+          const imageSizeMode = normalizeImageSizeModeValue(data.image_size_mode_gpt_image_2 || data.gpt_image_size_mode || "request");
+          confGptImageSizeMode.value = imageSizeMode;
+        }
+        const legacyGptSizeMode = normalizeImageSizeModeValue(data.gpt_image_size_mode || "request");
+        if (confImageSizeModeGptImage2High) {
+          confImageSizeModeGptImage2High.value = normalizeImageSizeModeValue(data.image_size_mode_gpt_image_2_high || legacyGptSizeMode);
+        }
+        if (confImageSizeModeGptImage2Higher) {
+          confImageSizeModeGptImage2Higher.value = normalizeImageSizeModeValue(data.image_size_mode_gpt_image_2_higher || legacyGptSizeMode);
+        }
+        if (confImageSizeModeBanana2) {
+          confImageSizeModeBanana2.value = normalizeImageSizeModeValue(data.image_size_mode_banana2 || "request");
+        }
+        if (confImageSizeModeBananaPro) {
+          confImageSizeModeBananaPro.value = normalizeImageSizeModeValue(data.image_size_mode_bananapro || "request");
+        }
+        if (confAdobe2APIBaseUrl) {
+          confAdobe2APIBaseUrl.value = data.adobe2api_base_url || "";
+        }
+        if (confAdobe2APIApiKey) {
+          confAdobe2APIApiKey.value = data.adobe2api_api_key || "";
+        }
+        if (confAdobe2APITimeoutSeconds) {
+          confAdobe2APITimeoutSeconds.value = Number(data.adobe2api_timeout_seconds || 300);
         }
         confGenerateTimeout.value = Number(data.generate_timeout || 300);
         confRetryEnabled.checked = Boolean(data.retry_enabled ?? true);
@@ -1415,7 +1449,15 @@ document.addEventListener("DOMContentLoaded", async () => {
         resource_proxy: confResourceProxy.value.trim(),
         leonardo_upload_proxy_mode: String(confLeonardoUploadProxyMode?.value || "basic").trim() || "basic",
         leonardo_upload_proxy: confLeonardoUploadProxy.value.trim(),
-        gpt_image_size_mode: String(confGptImageSizeMode?.value || "request").trim() === "1k" ? "1k" : "request",
+        gpt_image_size_mode: normalizeImageSizeModeValue(confGptImageSizeMode?.value || "request"),
+        image_size_mode_gpt_image_2: normalizeImageSizeModeValue(confGptImageSizeMode?.value || "request"),
+        image_size_mode_gpt_image_2_high: normalizeImageSizeModeValue(confImageSizeModeGptImage2High?.value || "request"),
+        image_size_mode_gpt_image_2_higher: normalizeImageSizeModeValue(confImageSizeModeGptImage2Higher?.value || "request"),
+        image_size_mode_banana2: normalizeImageSizeModeValue(confImageSizeModeBanana2?.value || "request"),
+        image_size_mode_bananapro: normalizeImageSizeModeValue(confImageSizeModeBananaPro?.value || "request"),
+        adobe2api_base_url: String(confAdobe2APIBaseUrl?.value || "").trim(),
+        adobe2api_api_key: String(confAdobe2APIApiKey?.value || "").trim(),
+        adobe2api_timeout_seconds: Math.max(1, Math.min(1800, Number(confAdobe2APITimeoutSeconds?.value || 300))),
         generate_timeout: Math.max(1, Number(confGenerateTimeout.value || 300)),
         retry_enabled: confRetryEnabled.checked,
         retry_max_attempts: Math.max(1, Math.min(10, Number(confRetryMaxAttempts.value || 3))),
@@ -1475,6 +1517,17 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
       if (!Number.isInteger(payload.batch_concurrency) || payload.batch_concurrency < 1 || payload.batch_concurrency > 100) {
         throw new Error("批量导入/积分并发数必须是 1-100 的整数");
+      }
+      if (payload.adobe2api_base_url) {
+        try {
+          const adobeURL = new URL(payload.adobe2api_base_url);
+          if (!/^https?:$/.test(adobeURL.protocol)) throw new Error("bad protocol");
+        } catch (_) {
+          throw new Error("Adobe2API 地址必须是有效的 http/https URL");
+        }
+      }
+      if (!Number.isInteger(payload.adobe2api_timeout_seconds) || payload.adobe2api_timeout_seconds < 1 || payload.adobe2api_timeout_seconds > 1800) {
+        throw new Error("Adobe2API 超时必须是 1-1800 的整数秒");
       }
       if (!Number.isInteger(payload.request_log_retention_limit) || payload.request_log_retention_limit < 100 || payload.request_log_retention_limit > 100000) {
         throw new Error("请求日志保留上限必须是 100-100000 的整数");
@@ -2308,7 +2361,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       statsPromise.then((statsData) => renderLogStats(statsData));
     } catch (err) {
-      logsTbody.innerHTML = `<tr><td colspan="9" class="empty-state" style="color: #ffb4bc;">${err.message || "日志加载失败"}</td></tr>`;
+      logsTbody.innerHTML = `<tr><td colspan="10" class="empty-state" style="color: #ffb4bc;">${err.message || "日志加载失败"}</td></tr>`;
       logsRunningTotal = 0;
       logsTotalPages = Math.max(1, logsCurrentPage || 1);
       renderLogsPagination();
@@ -2479,6 +2532,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         ${modelParamsText ? `<span class="log-model-meta">${escapeHtml(modelParamsText)}</span>` : ""}
       </div>
     `;
+    const sizeTransformText = String(item.size_transform || "").trim();
+    const sizeTransformCell = sizeTransformText
+      ? `<span class="log-size-transform" title="${escapeHtml(sizeTransformText)}">${escapeHtml(sizeTransformText)}</span>`
+      : `<span style="color:#7f96ad;">-</span>`;
     tr.innerHTML = `
       <td class="log-time-cell"><span class="date">${dateText}</span><span class="time">${timeText}</span></td>
       <td>${statusCell}</td>
@@ -2487,6 +2544,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       <td>${progressCell}</td>
       <td title="${tokenTitle}">${tokenCell}</td>
       <td title="${modelTitle || escapeHtml(modelText)}">${modelCell}</td>
+      <td>${sizeTransformCell}</td>
       <td class="log-prompt-cell">${promptText ? `<button class="log-prompt-btn" data-full-prompt="${encodeURIComponent(promptText)}" type="button">${escapeHtml(promptSummary)}</button>` : "-"}</td>
       <td>${previewCell}</td>
     `;
@@ -2519,7 +2577,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     ];
 
     if (!allRows.length) {
-      logsTbody.innerHTML = `<tr><td colspan="9" class="empty-state">暂无请求日志</td></tr>`;
+      logsTbody.innerHTML = `<tr><td colspan="10" class="empty-state">暂无请求日志</td></tr>`;
       return;
     }
 

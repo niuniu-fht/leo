@@ -200,6 +200,15 @@ body {
   white-space: nowrap;
 }
 .log-prompt-btn:hover { text-decoration: underline; }
+.log-size-transform {
+  display: inline-block;
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #9fd4ff;
+  font-size: 12px;
+}
 .preview-btn { cursor: pointer; }
 
 .stats-grid .stat-value { color: #e7f1fd; }

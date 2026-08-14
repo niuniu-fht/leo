@@ -51,6 +51,13 @@ var imageModelAliases = map[string]imageModelAlias{
 		Quality:         "high",
 		Description:     "Leonardo GPT Image-2 image generation",
 	},
+	"gpt-image-2-clarity": {
+		PublicID:        "gpt-image-2-clarity",
+		UpstreamModelID: "135b2740-a20b-48c8-8f86-6f68199e06c5",
+		RequestModel:    "gpt-image-2",
+		Quality:         "low",
+		Description:     "Leonardo GPT Image-2 low quality generation + Adobe2API transparent background",
+	},
 	"banana2": {
 		PublicID:        "banana2",
 		UpstreamModelID: "7418e71f-4133-4e1b-9895-bee19f48f2ce",
@@ -70,7 +77,7 @@ var imageModelAliases = map[string]imageModelAlias{
 	"bananapro": {
 		PublicID:        "bananapro",
 		UpstreamModelID: "7c02ef35-3a6b-4df6-b78d-873e5032c3b4",
-		RequestModel:    "nano-banana-2",
+		RequestModel:    "gemini-image-2",
 		Quality:         "high",
 		Description:     "Leonardo Nano Banana Pro image generation",
 		Aliases:         []string{"banana-pro", "nano-banana-pro"},
@@ -78,7 +85,7 @@ var imageModelAliases = map[string]imageModelAlias{
 	"banana-pro": {
 		PublicID:        "bananapro",
 		UpstreamModelID: "7c02ef35-3a6b-4df6-b78d-873e5032c3b4",
-		RequestModel:    "nano-banana-2",
+		RequestModel:    "gemini-image-2",
 		Quality:         "high",
 		Description:     "Leonardo Nano Banana Pro image generation",
 		Aliases:         []string{"banana-pro", "nano-banana-pro"},
@@ -86,10 +93,26 @@ var imageModelAliases = map[string]imageModelAlias{
 	"nano-banana-pro": {
 		PublicID:        "bananapro",
 		UpstreamModelID: "7c02ef35-3a6b-4df6-b78d-873e5032c3b4",
-		RequestModel:    "nano-banana-2",
+		RequestModel:    "gemini-image-2",
 		Quality:         "high",
 		Description:     "Leonardo Nano Banana Pro image generation",
 		Aliases:         []string{"banana-pro", "nano-banana-pro"},
+	},
+	"gpt-image-gemini-3.1-flash-image": {
+		PublicID:        "banana2",
+		UpstreamModelID: "7418e71f-4133-4e1b-9895-bee19f48f2ce",
+		RequestModel:    "nano-banana-2",
+		Quality:         "medium",
+		Description:     "Leonardo Nano Banana 2 image generation",
+		Aliases:         []string{"gpt-image-gemini-3.1-flash-image", "nano-banana-2"},
+	},
+	"gpt-image-gemini-3-pro-image": {
+		PublicID:        "bananapro",
+		UpstreamModelID: "7c02ef35-3a6b-4df6-b78d-873e5032c3b4",
+		RequestModel:    "gemini-image-2",
+		Quality:         "high",
+		Description:     "Leonardo Nano Banana Pro image generation",
+		Aliases:         []string{"gpt-image-gemini-3-pro-image", "banana-pro", "nano-banana-pro"},
 	},
 }
 
@@ -115,8 +138,9 @@ var openAIModelCatalog = []map[string]interface{}{
 	imageCatalogEntry("gpt-image-2", "Leonardo GPT Image-2 image generation", "low", nil),
 	imageCatalogEntry("gpt-image-2-high", "Leonardo GPT Image-2 image generation", "medium", nil),
 	imageCatalogEntry("gpt-image-2-higher", "Leonardo GPT Image-2 image generation", "high", nil),
-	imageCatalogEntry("banana2", "Leonardo Nano Banana 2 image generation", "medium", []string{"nano-banana-2"}),
-	imageCatalogEntry("bananapro", "Leonardo Nano Banana Pro image generation", "high", []string{"banana-pro", "nano-banana-pro"}),
+	imageCatalogEntry("gpt-image-2-clarity", "Leonardo GPT Image-2 low quality generation + Adobe2API transparent background", "low", nil),
+	imageCatalogEntry("gpt-image-gemini-3.1-flash-image", "Leonardo Nano Banana 2 image generation", "medium", []string{"banana2", "nano-banana-2"}),
+	imageCatalogEntry("gpt-image-gemini-3-pro-image", "Leonardo Nano Banana Pro image generation", "high", []string{"bananapro", "banana-pro", "nano-banana-pro"}),
 	{
 		"id":          "video-2.0",
 		"object":      "model",
@@ -429,11 +453,12 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 	}
 
 	publicModelID, upstreamModelID, requestModel, quality := s.resolveImageGenerationModel(payload.Model)
-	width, height, sizeLabel, err := s.resolveImageRequestSize(publicModelID, payload.Size, payload.AspectRatio)
+	sizeInfo, err := s.resolveImageRequestSizeDetails(publicModelID, payload.Size, payload.AspectRatio)
 	if err != nil {
 		writeJSON(w, 400, errorResp(err.Error(), "invalid_request_error"))
 		return
 	}
+	width, height, sizeLabel := sizeInfo.Width, sizeInfo.Height, sizeInfo.Label
 
 	session, usedTokenID, releaseTokenPreparation := s.getLeonardoSessionForModelExcludingWithPreparationLease("", nil, publicModelID, false)
 	if session == nil {
@@ -469,7 +494,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			if payload.ImageURL != "" && idx == 0 {
 				msg = fmt.Sprintf("invalid image_url: %v", err)
 			}
-			s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, imageInputMode, imageOperation, imageReferenceCount, usedTokenID, session, time.Since(startTime).Seconds(), 400, msg)
+			s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, sizeInfo.Transform, imageInputMode, imageOperation, imageReferenceCount, usedTokenID, session, time.Since(startTime).Seconds(), 400, msg)
 			writeJSON(w, 400, errorResp(msg, "invalid_request_error"))
 			return
 		}
@@ -479,16 +504,23 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 	nativeImageRequest := imageUsesNativeRequest(publicModelID)
 	promptEnhance := ""
 	styleIDs := []string(nil)
+	requestQuality := quality
 	if nativeImageRequest {
 		promptEnhance = "OFF"
 		styleIDs = []string{"556c1ee5-ec38-42e8-955a-1e82dad0ffa1"}
+	}
+	if imageUsesGeminiImage2Request(publicModelID, requestModel) {
+		nativeImageRequest = true
+		promptEnhance = "AUTO"
+		styleIDs = []string{"111dc692-d470-4eec-b791-3475abac4c46"}
+		requestQuality = ""
 	}
 
 	result, err := s.LeonardoClient.GenerateImage(session, &leonardo.ImageGenerateRequest{
 		RequestModel:       requestModel,
 		ModelID:            upstreamModelID,
 		Prompt:             payload.Prompt,
-		Quality:            quality,
+		Quality:            requestQuality,
 		Width:              width,
 		Height:             height,
 		Quantity:           payload.N,
@@ -506,7 +538,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			s.TokenMgr.ReportFail(usedTokenID)
 		}
 		msg := fmt.Sprintf("image generation failed: %v", err)
-		s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, imageInputMode, imageOperation, imageReferenceCount, usedTokenID, session, time.Since(startTime).Seconds(), statusCode, msg)
+		s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, sizeInfo.Transform, imageInputMode, imageOperation, imageReferenceCount, usedTokenID, session, time.Since(startTime).Seconds(), statusCode, msg)
 		writeJSON(w, statusCode, errorResp(msg, "server_error"))
 		return
 	}
@@ -527,6 +559,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			AccountEmail:         accountEmail,
 			Model:                publicModelID,
 			ModelParams:          fmt.Sprintf("%s quality=%s n=%d", sizeLabel, quality, payload.N),
+			SizeTransform:        sizeInfo.Transform,
 			Prompt:               payload.Prompt,
 			GenerationID:         result.GenerationID,
 			UpstreamGenerationID: result.GenerationID,
@@ -562,23 +595,39 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	postprocess := ""
 	finalURLs := make([]string, 0, len(imageURLs))
-	for idx, rawURL := range imageURLs {
-		generationName := result.GenerationID
-		if len(imageURLs) > 1 {
-			generationName = fmt.Sprintf("%s-%d", result.GenerationID, idx+1)
-		}
-		finalURL, materializeErr := s.materializeGeneratedMedia(rawURL, generationName, "image")
-		if materializeErr != nil {
+	if imageUsesAdobeClarity(publicModelID) {
+		postprocess = "adobe2api.transparent"
+		finalURLs, err = s.convertGeneratedImagesToTransparentWithAdobe(r.Context(), imageURLs, result.GenerationID, sizeLabel)
+		if err != nil {
+			msg := fmt.Sprintf("transparent background failed: %v", err)
 			if s.ReqLog != nil {
-				s.ReqLog.UpdateByGenerationID(result.GenerationID, "FAILED", 502, "", "", fmt.Sprintf("save generated image failed: %v", materializeErr))
+				s.ReqLog.UpdateByGenerationID(result.GenerationID, "FAILED", 502, "", "", msg)
 				s.ReqLog.UpdateDuration(result.GenerationID, elapsedSec)
 			}
 			s.refreshTokenCredits(usedTokenID, session)
-			writeJSON(w, 502, errorResp(fmt.Sprintf("save generated image failed: %v", materializeErr), "server_error"))
+			writeJSON(w, 502, errorResp(msg, "server_error"))
 			return
 		}
-		finalURLs = append(finalURLs, finalURL)
+	} else {
+		for idx, rawURL := range imageURLs {
+			generationName := result.GenerationID
+			if len(imageURLs) > 1 {
+				generationName = fmt.Sprintf("%s-%d", result.GenerationID, idx+1)
+			}
+			finalURL, materializeErr := s.materializeGeneratedMedia(rawURL, generationName, "image")
+			if materializeErr != nil {
+				if s.ReqLog != nil {
+					s.ReqLog.UpdateByGenerationID(result.GenerationID, "FAILED", 502, "", "", fmt.Sprintf("save generated image failed: %v", materializeErr))
+					s.ReqLog.UpdateDuration(result.GenerationID, elapsedSec)
+				}
+				s.refreshTokenCredits(usedTokenID, session)
+				writeJSON(w, 502, errorResp(fmt.Sprintf("save generated image failed: %v", materializeErr), "server_error"))
+				return
+			}
+			finalURLs = append(finalURLs, finalURL)
+		}
 	}
 	previewURL := ""
 	if len(finalURLs) > 0 {
@@ -606,6 +655,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			"quality":           quality,
 			"size":              sizeLabel,
 			"credit_cost":       result.APICreditCost,
+			"postprocess":       postprocess,
 		},
 	})
 }
@@ -1202,18 +1252,80 @@ func resolveOpenAIImageSize(size string, aspectRatio string) (int, int, string, 
 	}
 }
 
+type imageSizeResolution struct {
+	Width         int
+	Height        int
+	Label         string
+	Mode          string
+	OriginalLabel string
+	FinalLabel    string
+	Transform     string
+}
+
 func (s *Server) resolveImageRequestSize(publicModelID string, size string, aspectRatio string) (int, int, string, error) {
-	if !isGPTImagePublicModel(publicModelID) {
-		return resolveOpenAIImageSize(size, aspectRatio)
+	info, err := s.resolveImageRequestSizeDetails(publicModelID, size, aspectRatio)
+	if err != nil {
+		return 0, 0, "", err
 	}
-	mode := "request"
-	if s != nil && s.Config != nil {
-		mode = s.Config.GetString("gpt_image_size_mode", "request")
-	}
+	return info.Width, info.Height, info.Label, nil
+}
+
+func (s *Server) resolveImageRequestSizeDetails(publicModelID string, size string, aspectRatio string) (imageSizeResolution, error) {
+	mode := s.imageSizeModeForModel(publicModelID)
 	if !isGPTImage1KSizeMode(mode) {
-		return resolveOpenAIImageSize(size, aspectRatio)
+		width, height, label, err := resolveOpenAIImageSize(size, aspectRatio)
+		if err != nil {
+			return imageSizeResolution{}, err
+		}
+		return imageSizeResolution{
+			Width:         width,
+			Height:        height,
+			Label:         label,
+			Mode:          "request",
+			OriginalLabel: label,
+			FinalLabel:    label,
+		}, nil
 	}
-	return resolveOpenAIImageSize1K(size, aspectRatio)
+
+	originalWidth, originalHeight, originalLabel, originalErr := resolveOpenAIImageSize(size, aspectRatio)
+	finalWidth, finalHeight, finalLabel, err := resolveOpenAIImageSize1K(size, aspectRatio)
+	if err != nil {
+		return imageSizeResolution{}, err
+	}
+	if originalErr != nil || originalWidth <= 0 || originalHeight <= 0 {
+		originalLabel = rawImageSizeInputLabel(size, aspectRatio)
+		if originalLabel == "" {
+			originalLabel = "未识别"
+		}
+	}
+	transform := buildImageSizeTransform(originalWidth, originalHeight, originalLabel, finalWidth, finalHeight, finalLabel)
+	return imageSizeResolution{
+		Width:         finalWidth,
+		Height:        finalHeight,
+		Label:         finalLabel,
+		Mode:          "1k",
+		OriginalLabel: originalLabel,
+		FinalLabel:    finalLabel,
+		Transform:     transform,
+	}, nil
+}
+
+func imageSizeModeConfigKey(modelID string) string {
+	return imageConfigKey("image_size_mode_", modelID)
+}
+
+func (s *Server) imageSizeModeForModel(publicModelID string) string {
+	modelID := strings.ToLower(strings.TrimSpace(publicModelID))
+	if s == nil || s.Config == nil {
+		return "request"
+	}
+	if specific := strings.TrimSpace(s.Config.GetString(imageSizeModeConfigKey(modelID), "")); specific != "" {
+		return specific
+	}
+	if isGPTImagePublicModel(modelID) {
+		return s.Config.GetString("gpt_image_size_mode", "request")
+	}
+	return "request"
 }
 
 func isGPTImagePublicModel(publicModelID string) bool {
@@ -1227,6 +1339,65 @@ func isGPTImage1KSizeMode(mode string) bool {
 	default:
 		return false
 	}
+}
+
+func rawImageSizeInputLabel(size string, aspectRatio string) string {
+	size = strings.TrimSpace(size)
+	aspectRatio = strings.TrimSpace(aspectRatio)
+	if size != "" {
+		return size
+	}
+	if aspectRatio != "" {
+		return aspectRatio
+	}
+	return ""
+}
+
+func buildImageSizeTransform(originalWidth int, originalHeight int, originalLabel string, finalWidth int, finalHeight int, finalLabel string) string {
+	originalLabel = strings.TrimSpace(originalLabel)
+	finalLabel = strings.TrimSpace(finalLabel)
+	if finalLabel == "" && finalWidth > 0 && finalHeight > 0 {
+		finalLabel = fmt.Sprintf("%dx%d", finalWidth, finalHeight)
+	}
+	originalRatio := "-"
+	if originalWidth > 0 && originalHeight > 0 {
+		originalRatio = imageRatioLabel(originalWidth, originalHeight)
+		if originalLabel == "" {
+			originalLabel = fmt.Sprintf("%dx%d", originalWidth, originalHeight)
+		}
+	}
+	finalRatio := "-"
+	if finalWidth > 0 && finalHeight > 0 {
+		finalRatio = imageRatioLabel(finalWidth, finalHeight)
+	}
+	if originalLabel == "" {
+		originalLabel = "未识别"
+	}
+	return fmt.Sprintf("%s（%s）→ %s（%s）", originalLabel, originalRatio, finalLabel, finalRatio)
+}
+
+func imageRatioLabel(width int, height int) string {
+	if width <= 0 || height <= 0 {
+		return "-"
+	}
+	divisor := gcdInt(width, height)
+	return fmt.Sprintf("%d:%d", width/divisor, height/divisor)
+}
+
+func gcdInt(a int, b int) int {
+	if a < 0 {
+		a = -a
+	}
+	if b < 0 {
+		b = -b
+	}
+	for b != 0 {
+		a, b = b, a%b
+	}
+	if a == 0 {
+		return 1
+	}
+	return a
 }
 
 func resolveOpenAIImageSize1K(size string, aspectRatio string) (int, int, string, error) {
@@ -1347,7 +1518,15 @@ func imageAliasForModelID(modelID string) (imageModelAlias, bool) {
 
 func imageUsesNativeRequest(modelID string) bool {
 	modelID = strings.ToLower(strings.TrimSpace(modelID))
-	return modelID == "gpt-image-2" || modelID == "gpt-image-2-high" || modelID == "gpt-image-2-higher"
+	return modelID == "gpt-image-2" || modelID == "gpt-image-2-high" || modelID == "gpt-image-2-higher" || modelID == "gpt-image-2-clarity" || modelID == "bananapro"
+}
+
+func imageUsesGeminiImage2Request(publicModelID string, requestModel string) bool {
+	return strings.ToLower(strings.TrimSpace(publicModelID)) == "bananapro" || strings.ToLower(strings.TrimSpace(requestModel)) == "gemini-image-2"
+}
+
+func imageUsesAdobeClarity(modelID string) bool {
+	return strings.ToLower(strings.TrimSpace(modelID)) == "gpt-image-2-clarity"
 }
 
 func imageQualityForModelID(modelID string) (string, bool) {
@@ -1382,8 +1561,10 @@ func (s *Server) resolveImageGenerationModel(model string) (publicModelID string
 		}
 		if specificRequestModel := strings.TrimSpace(s.Config.GetString(imageRequestModelConfigKey(requestedModelID))); specificRequestModel != "" {
 			requestModel = specificRequestModel
-		} else if globalRequestModel := strings.TrimSpace(s.Config.GetString("image_request_model", "")); globalRequestModel != "" {
-			requestModel = globalRequestModel
+		} else if !knownAlias {
+			if globalRequestModel := strings.TrimSpace(s.Config.GetString("image_request_model", "")); globalRequestModel != "" {
+				requestModel = globalRequestModel
+			}
 		}
 		if specificModelID := strings.TrimSpace(s.Config.GetString(imageModelConfigKey(requestedModelID))); specificModelID != "" {
 			upstreamModelID = specificModelID
@@ -1408,7 +1589,7 @@ func (s *Server) resolveImageGenerationModel(model string) (publicModelID string
 	return publicModelID, upstreamModelID, requestModel, quality
 }
 
-func (s *Server) logImageRequestFailure(prompt, modelID, quality, sizeLabel, inputMode, operation string, referenceCount int, tokenID string, session *leonardo.TokenSession, durationSec float64, statusCode int, errorMessage string) {
+func (s *Server) logImageRequestFailure(prompt, modelID, quality, sizeLabel, sizeTransform, inputMode, operation string, referenceCount int, tokenID string, session *leonardo.TokenSession, durationSec float64, statusCode int, errorMessage string) {
 	if s == nil || s.ReqLog == nil {
 		return
 	}
@@ -1436,6 +1617,7 @@ func (s *Server) logImageRequestFailure(prompt, modelID, quality, sizeLabel, inp
 		AccountEmail:   accountEmail,
 		Model:          modelID,
 		ModelParams:    fmt.Sprintf("%s quality=%s", sizeLabel, quality),
+		SizeTransform:  sizeTransform,
 		Prompt:         prompt,
 		ErrorCode:      strconv.Itoa(statusCode),
 		ErrorMessage:   errorMessage,

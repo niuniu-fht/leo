@@ -206,13 +206,26 @@ func main() {
 	// ─── Static files (admin UI) ───
 	if info, statErr := os.Stat(staticDir); statErr == nil && info.IsDir() {
 		fileServer := http.FileServer(http.Dir(staticDir))
-		mux.Handle("/static/", http.StripPrefix("/static/", fileServer))
+		serveAdminFile := func(w http.ResponseWriter, r *http.Request, filePath string) {
+			w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+			w.Header().Set("Pragma", "no-cache")
+			w.Header().Set("Expires", "0")
+			http.ServeFile(w, r, filePath)
+		}
+		mux.Handle("/static/", http.StripPrefix("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "admin.js") || strings.HasSuffix(r.URL.Path, "admin.css") {
+				w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+				w.Header().Set("Pragma", "no-cache")
+				w.Header().Set("Expires", "0")
+			}
+			fileServer.ServeHTTP(w, r)
+		})))
 		mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
-			http.ServeFile(w, r, filepath.Join(staticDir, "login.html"))
+			serveAdminFile(w, r, filepath.Join(staticDir, "login.html"))
 		})
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/" || r.URL.Path == "/admin" {
-				http.ServeFile(w, r, filepath.Join(staticDir, "admin.html"))
+				serveAdminFile(w, r, filepath.Join(staticDir, "admin.html"))
 				return
 			}
 			// Try serving static file
@@ -221,7 +234,7 @@ func main() {
 				http.ServeFile(w, r, filePath)
 				return
 			}
-			http.ServeFile(w, r, filepath.Join(staticDir, "admin.html"))
+			serveAdminFile(w, r, filepath.Join(staticDir, "admin.html"))
 		})
 	}
 
