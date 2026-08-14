@@ -3,6 +3,8 @@ package handler
 import (
 	"errors"
 	"testing"
+
+	"leo2api/internal/config"
 )
 
 func TestImageQualityForModelID(t *testing.T) {
@@ -74,6 +76,47 @@ func TestResolveOpenAIImageSize(t *testing.T) {
 		if width != tt.wantWidth || height != tt.wantHeight || label != tt.wantLabel {
 			t.Fatalf("resolveOpenAIImageSize(%q, %q) = %dx%d %q, want %dx%d %q", tt.size, tt.aspectRatio, width, height, label, tt.wantWidth, tt.wantHeight, tt.wantLabel)
 		}
+	}
+}
+
+func TestResolveGPTImageSizeMode1K(t *testing.T) {
+	cfg := config.New()
+	cfg.Set("gpt_image_size_mode", "1k")
+	s := &Server{Config: cfg}
+	tests := []struct {
+		size        string
+		aspectRatio string
+		wantWidth   int
+		wantHeight  int
+		wantLabel   string
+	}{
+		{size: "", aspectRatio: "", wantWidth: 1024, wantHeight: 1024, wantLabel: "1024x1024"},
+		{size: "1536x1536", aspectRatio: "", wantWidth: 1024, wantHeight: 1024, wantLabel: "1024x1024"},
+		{size: "2048x1024", aspectRatio: "", wantWidth: 1024, wantHeight: 512, wantLabel: "1024x512"},
+		{size: "512x768", aspectRatio: "", wantWidth: 512, wantHeight: 768, wantLabel: "512x768"},
+		{size: "bad-size", aspectRatio: "", wantWidth: 1024, wantHeight: 1024, wantLabel: "1024x1024"},
+	}
+	for _, tt := range tests {
+		width, height, label, err := s.resolveImageRequestSize("gpt-image-2", tt.size, tt.aspectRatio)
+		if err != nil {
+			t.Fatalf("resolveImageRequestSize(%q, %q) error = %v", tt.size, tt.aspectRatio, err)
+		}
+		if width != tt.wantWidth || height != tt.wantHeight || label != tt.wantLabel {
+			t.Fatalf("resolveImageRequestSize(%q, %q) = %dx%d %q, want %dx%d %q", tt.size, tt.aspectRatio, width, height, label, tt.wantWidth, tt.wantHeight, tt.wantLabel)
+		}
+	}
+}
+
+func TestResolveBananaImageSizeIgnoresGPT1KMode(t *testing.T) {
+	cfg := config.New()
+	cfg.Set("gpt_image_size_mode", "1k")
+	s := &Server{Config: cfg}
+	width, height, label, err := s.resolveImageRequestSize("banana2", "1536x1536", "")
+	if err != nil {
+		t.Fatalf("resolveImageRequestSize banana error = %v", err)
+	}
+	if width != 1536 || height != 1536 || label != "1536x1536" {
+		t.Fatalf("banana size = %dx%d %q, want 1536x1536", width, height, label)
 	}
 }
 

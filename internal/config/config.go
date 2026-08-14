@@ -21,6 +21,11 @@ var (
 	once     sync.Once
 )
 
+// New returns an isolated in-memory configuration manager.
+func New() *Manager {
+	return &Manager{data: make(map[string]interface{})}
+}
+
 // Global returns the singleton Manager instance.
 func Global() *Manager {
 	once.Do(func() {

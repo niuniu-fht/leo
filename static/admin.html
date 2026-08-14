@@ -174,6 +174,9 @@
                   <button class="nav-link config-cat-btn" type="button" data-target="cfg-network">代理与网络</button>
                 </li>
                 <li class="nav-item" role="presentation">
+                  <button class="nav-link config-cat-btn" type="button" data-target="cfg-image">图片生成</button>
+                </li>
+                <li class="nav-item" role="presentation">
                   <button class="nav-link config-cat-btn" type="button" data-target="cfg-retry">重试与容错</button>
                 </li>
                 <li class="nav-item" role="presentation">
@@ -265,6 +268,17 @@
                   <button id="testProxyBtn" type="button" class="btn btn-outline-secondary">检测代理与业务权限</button>
                   <p class="help text-secondary small mt-1">会先检测基础代理和资源代理的网络连通性，再用当前有效 token 检测基础代理是否真的能访问积分接口。</p>
                   <pre id="proxyTestResult" class="help text-secondary small mt-2 p-2 leo-pre" style="white-space: pre-wrap;">点击上方按钮后，会在这里显示连通性检测和业务权限检测结果。</pre>
+                </div>
+              </section>
+
+              <section id="cfg-image" class="config-cat-pane">
+                <div class="form-group mb-3">
+                  <label class="form-label" for="confGptImageSizeMode">GPT 图片比例默认设置</label>
+                  <select id="confGptImageSizeMode" class="form-select input-select">
+                    <option value="request">根据请求</option>
+                    <option value="1k">1k</option>
+                  </select>
+                  <p class="help text-secondary small mt-1">选择 1k 后，gpt-image-2 系列会把 size 解析后按最长边 1024 等比缩小；无法识别的 size 自动使用 1024x1024。选择“根据请求”则保持用户请求尺寸。</p>
                 </div>
               </section>
 

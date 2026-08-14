@@ -1113,6 +1113,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const confResourceProxy = document.getElementById("confResourceProxy");
   const confLeonardoUploadProxyMode = document.getElementById("confLeonardoUploadProxyMode");
   const confLeonardoUploadProxy = document.getElementById("confLeonardoUploadProxy");
+  const confGptImageSizeMode = document.getElementById("confGptImageSizeMode");
   const testProxyBtn = document.getElementById("testProxyBtn");
   const proxyTestResult = document.getElementById("proxyTestResult");
   const confGenerateTimeout = document.getElementById("confGenerateTimeout");
@@ -1330,6 +1331,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         confResourceProxy.value = data.resource_proxy || "";
         confLeonardoUploadProxyMode.value = String(data.leonardo_upload_proxy_mode || "basic");
         confLeonardoUploadProxy.value = data.leonardo_upload_proxy || "";
+        if (confGptImageSizeMode) {
+          const imageSizeMode = String(data.gpt_image_size_mode || "request").trim().toLowerCase();
+          confGptImageSizeMode.value = imageSizeMode === "1k" ? "1k" : "request";
+        }
         confGenerateTimeout.value = Number(data.generate_timeout || 300);
         confRetryEnabled.checked = Boolean(data.retry_enabled ?? true);
         confRetryMaxAttempts.value = Number(data.retry_max_attempts || 3);
@@ -1409,6 +1414,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         resource_proxy: confResourceProxy.value.trim(),
         leonardo_upload_proxy_mode: String(confLeonardoUploadProxyMode?.value || "basic").trim() || "basic",
         leonardo_upload_proxy: confLeonardoUploadProxy.value.trim(),
+        gpt_image_size_mode: String(confGptImageSizeMode?.value || "request").trim() === "1k" ? "1k" : "request",
         generate_timeout: Math.max(1, Number(confGenerateTimeout.value || 300)),
         retry_enabled: confRetryEnabled.checked,
         retry_max_attempts: Math.max(1, Math.min(10, Number(confRetryMaxAttempts.value || 3))),

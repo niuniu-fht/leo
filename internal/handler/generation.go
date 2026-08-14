@@ -428,7 +428,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 	}
 
 	publicModelID, upstreamModelID, requestModel, quality := s.resolveImageGenerationModel(payload.Model)
-	width, height, sizeLabel, err := resolveOpenAIImageSize(payload.Size, payload.AspectRatio)
+	width, height, sizeLabel, err := s.resolveImageRequestSize(publicModelID, payload.Size, payload.AspectRatio)
 	if err != nil {
 		writeJSON(w, 400, errorResp(err.Error(), "invalid_request_error"))
 		return
@@ -1159,13 +1159,8 @@ func resolveOpenAIImageSize(size string, aspectRatio string) (int, int, string, 
 		if size == "" {
 			return 1536, 1536, "1536x1536", nil
 		}
-		parts := strings.Split(size, "x")
-		if len(parts) == 2 {
-			width, wErr := strconv.Atoi(strings.TrimSpace(parts[0]))
-			height, hErr := strconv.Atoi(strings.TrimSpace(parts[1]))
-			if wErr == nil && hErr == nil && width > 0 && height > 0 {
-				return width, height, fmt.Sprintf("%dx%d", width, height), nil
-			}
+		if width, height, ok := parseOpenAIImageSizePair(size); ok {
+			return width, height, fmt.Sprintf("%dx%d", width, height), nil
 		}
 		switch size {
 		case "1:1", "square":
@@ -1193,6 +1188,79 @@ func resolveOpenAIImageSize(size string, aspectRatio string) (int, int, string, 
 	default:
 		return 0, 0, "", fmt.Errorf("unsupported image aspect_ratio %q", aspectRatio)
 	}
+}
+
+func (s *Server) resolveImageRequestSize(publicModelID string, size string, aspectRatio string) (int, int, string, error) {
+	if !isGPTImagePublicModel(publicModelID) {
+		return resolveOpenAIImageSize(size, aspectRatio)
+	}
+	mode := "request"
+	if s != nil && s.Config != nil {
+		mode = s.Config.GetString("gpt_image_size_mode", "request")
+	}
+	if !isGPTImage1KSizeMode(mode) {
+		return resolveOpenAIImageSize(size, aspectRatio)
+	}
+	return resolveOpenAIImageSize1K(size, aspectRatio)
+}
+
+func isGPTImagePublicModel(publicModelID string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(publicModelID)), "gpt-image-2")
+}
+
+func isGPTImage1KSizeMode(mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "1k", "1024", "1024x1024", "scale_1k", "scale-1k":
+		return true
+	default:
+		return false
+	}
+}
+
+func resolveOpenAIImageSize1K(size string, aspectRatio string) (int, int, string, error) {
+	if width, height, ok := parseOpenAIImageSizePair(size); ok {
+		return scaleImageSizeTo1K(width, height)
+	}
+	width, height, _, err := resolveOpenAIImageSize(size, aspectRatio)
+	if err != nil {
+		return 1024, 1024, "1024x1024", nil
+	}
+	return scaleImageSizeTo1K(width, height)
+}
+
+func parseOpenAIImageSizePair(size string) (int, int, bool) {
+	size = strings.ToLower(strings.TrimSpace(size))
+	parts := strings.Split(size, "x")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	width, wErr := strconv.Atoi(strings.TrimSpace(parts[0]))
+	height, hErr := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if wErr != nil || hErr != nil || width <= 0 || height <= 0 {
+		return 0, 0, false
+	}
+	return width, height, true
+}
+
+func scaleImageSizeTo1K(width, height int) (int, int, string, error) {
+	if width <= 0 || height <= 0 {
+		return 1024, 1024, "1024x1024", nil
+	}
+	maxDim := width
+	if height > maxDim {
+		maxDim = height
+	}
+	if maxDim > 1024 {
+		width = (width*1024 + maxDim/2) / maxDim
+		height = (height*1024 + maxDim/2) / maxDim
+		if width < 1 {
+			width = 1
+		}
+		if height < 1 {
+			height = 1
+		}
+	}
+	return width, height, fmt.Sprintf("%dx%d", width, height), nil
 }
 
 func imageConfigKey(prefix, modelID string) string {

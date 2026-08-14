@@ -729,6 +729,7 @@ config/config.json
   "image_model_id_gpt_image_2": "",
   "image_model_id_gpt_image_2_high": "",
   "image_model_id_gpt_image_2_higher": "",
+  "gpt_image_size_mode": "request",
   "generate_timeout": 300,
   "retry_enabled": true,
   "retry_max_attempts": 3,
@@ -759,6 +760,7 @@ config/config.json
 | `image_model_id_gpt_image_2` | 覆盖 `gpt-image-2` 使用的上游 `modelId` |
 | `image_model_id_gpt_image_2_high` | 覆盖 `gpt-image-2-high` 使用的上游 `modelId` |
 | `image_model_id_gpt_image_2_higher` | 覆盖 `gpt-image-2-higher` 使用的上游 `modelId` |
+| `gpt_image_size_mode` | GPT 图片尺寸处理：`request` 按请求，`1k` 按最长边 1024 等比缩小，无法识别的 size 使用 `1024x1024` |
 
 如果三个质量档使用同一个上游模型，只填 `image_model_id` 或 `image_model_id_gpt_image_2` 即可；如果每档不同，就分别填写三个覆盖项。
 

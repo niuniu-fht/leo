@@ -11,6 +11,7 @@
   "generate_timeout": 300,
   "generated_max_size_mb": 40960,
   "generated_prune_size_mb": 200,
+  "gpt_image_size_mode": "request",
   "image_model_id": "",
   "image_model_id_banana2": "7418e71f-4133-4e1b-9895-bee19f48f2ce",
   "image_model_id_banana_pro": "7c02ef35-3a6b-4df6-b78d-873e5032c3b4",
