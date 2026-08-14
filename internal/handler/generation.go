@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 	"strings"
@@ -380,6 +383,37 @@ func (s *Server) HandleImageGeneration(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, errorResp("invalid request body", "invalid_request_error"))
 		return
 	}
+	s.handleOpenAIImageRequest(w, r, payload)
+}
+
+// HandleImageEdits handles POST /v1/images/edits.
+func (s *Server) HandleImageEdits(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := s.requireAPIKey(r); err != nil {
+		writeJSON(w, 401, errorResp("invalid api key", "authentication_error"))
+		return
+	}
+	if s.LeonardoClient == nil {
+		writeJSON(w, 500, errorResp("Leonardo client not initialized", "server_error"))
+		return
+	}
+
+	payload, err := parseOpenAIImageEditRequest(r)
+	if err != nil {
+		writeJSON(w, 400, errorResp(err.Error(), "invalid_request_error"))
+		return
+	}
+	if len(payload.referenceURLs()) == 0 {
+		writeJSON(w, 400, errorResp("image is required", "invalid_request_error"))
+		return
+	}
+	s.handleOpenAIImageRequest(w, r, payload)
+}
+
+func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request, payload openAIImageGenerationRequest) {
 	payload.Prompt = strings.TrimSpace(payload.Prompt)
 	if len(payload.Prompt) < 3 {
 		writeJSON(w, 400, errorResp("prompt must contain at least 3 characters", "invalid_request_error"))
@@ -970,6 +1004,116 @@ type openAIImageGenerationRequest struct {
 	ImageBase64  string                      `json:"image_base64"`
 	ImageBase64s []string                    `json:"image_base64s"`
 	Images       []openAIImageReferenceInput `json:"images"`
+}
+
+func parseOpenAIImageEditRequest(r *http.Request) (openAIImageGenerationRequest, error) {
+	contentType := strings.ToLower(r.Header.Get("Content-Type"))
+	if !strings.Contains(contentType, "multipart/form-data") {
+		var payload openAIImageGenerationRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			return payload, fmt.Errorf("invalid request body")
+		}
+		return payload, nil
+	}
+
+	if err := r.ParseMultipartForm((maxRemoteImageBytes * 4) + (4 << 20)); err != nil {
+		return openAIImageGenerationRequest{}, fmt.Errorf("invalid multipart form: %w", err)
+	}
+
+	payload := openAIImageGenerationRequest{
+		Prompt:      firstFormValue(r, "prompt"),
+		Model:       firstFormValue(r, "model"),
+		Size:        firstFormValue(r, "size"),
+		AspectRatio: firstFormValue(r, "aspect_ratio"),
+	}
+	if rawN := strings.TrimSpace(firstFormValue(r, "n")); rawN != "" {
+		n, err := strconv.Atoi(rawN)
+		if err != nil {
+			return payload, fmt.Errorf("invalid n")
+		}
+		payload.N = n
+	}
+
+	for _, field := range []string{"image_url", "url"} {
+		for _, raw := range formValues(r, field) {
+			payload.ImageURLs = append(payload.ImageURLs, raw)
+		}
+	}
+	for _, field := range []string{"image_urls", "image_url[]", "images[]"} {
+		for _, raw := range formValues(r, field) {
+			payload.ImageURLs = append(payload.ImageURLs, raw)
+		}
+	}
+	for _, field := range []string{"image_base64", "base64", "b64_json", "image"} {
+		for _, raw := range formValues(r, field) {
+			payload.ImageBase64s = append(payload.ImageBase64s, raw)
+		}
+	}
+	for _, field := range []string{"image_base64s", "base64s"} {
+		for _, raw := range formValues(r, field) {
+			payload.ImageBase64s = append(payload.ImageBase64s, raw)
+		}
+	}
+
+	if r.MultipartForm != nil {
+		for _, field := range []string{"image", "image[]", "images"} {
+			for _, fh := range r.MultipartForm.File[field] {
+				dataURL, err := multipartImageFileToDataURL(fh)
+				if err != nil {
+					return payload, err
+				}
+				payload.ImageBase64s = append(payload.ImageBase64s, dataURL)
+			}
+		}
+	}
+	return payload, nil
+}
+
+func firstFormValue(r *http.Request, key string) string {
+	values := formValues(r, key)
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+func formValues(r *http.Request, key string) []string {
+	if r.MultipartForm == nil || r.MultipartForm.Value == nil {
+		return nil
+	}
+	rawValues := r.MultipartForm.Value[key]
+	out := make([]string, 0, len(rawValues))
+	for _, raw := range rawValues {
+		raw = strings.TrimSpace(raw)
+		if raw != "" {
+			out = append(out, raw)
+		}
+	}
+	return out
+}
+
+func multipartImageFileToDataURL(fh *multipart.FileHeader) (string, error) {
+	file, err := fh.Open()
+	if err != nil {
+		return "", fmt.Errorf("open image failed: %w", err)
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(io.LimitReader(file, maxRemoteImageBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("read image failed: %w", err)
+	}
+	if len(data) == 0 {
+		return "", fmt.Errorf("image file is empty")
+	}
+	if len(data) > maxRemoteImageBytes {
+		return "", fmt.Errorf("image file exceeds %d MB limit", maxRemoteImageBytes>>20)
+	}
+	contentType := http.DetectContentType(data)
+	if !strings.HasPrefix(strings.ToLower(contentType), "image/") {
+		return "", fmt.Errorf("image file is not an image")
+	}
+	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data), nil
 }
 
 func (r openAIImageGenerationRequest) referenceURLs() []string {

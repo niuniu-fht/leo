@@ -114,6 +114,7 @@ func main() {
 	// ─── OpenAI-compatible generation API ───
 	mux.HandleFunc("/v1/models", srv.HandleListModels)
 	mux.HandleFunc("/v1/images/generations", srv.HandleImageGeneration)
+	mux.HandleFunc("/v1/images/edits", srv.HandleImageEdits)
 	mux.HandleFunc("/v1/chat/completions", srv.HandleChatCompletions)
 	mux.HandleFunc("/v1/video/generations", srv.HandleVideoGeneration)
 	mux.HandleFunc("/v1/video/generations/", srv.HandleVideoGenerationStatus)
