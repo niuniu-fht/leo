@@ -117,6 +117,8 @@ func TestResolveGPTImageSizeMode1K(t *testing.T) {
 		{size: "1536x1536", aspectRatio: "", wantWidth: 1024, wantHeight: 1024, wantLabel: "1024x1024"},
 		{size: "2048x1024", aspectRatio: "", wantWidth: 1376, wantHeight: 768, wantLabel: "1376x768"},
 		{size: "512x768", aspectRatio: "", wantWidth: 848, wantHeight: 1264, wantLabel: "848x1264"},
+		{size: "1500×1000", aspectRatio: "", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
+		{size: "1500 * 1000", aspectRatio: "", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
 		{size: "1024x1024", aspectRatio: "", wantWidth: 1024, wantHeight: 1024, wantLabel: "1024x1024"},
 		{size: "848x1264", aspectRatio: "", wantWidth: 848, wantHeight: 1264, wantLabel: "848x1264"},
 		{size: "1264x848", aspectRatio: "", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},

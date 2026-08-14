@@ -1437,6 +1437,14 @@ func resolveOpenAIImageSizeScaled(size string, aspectRatio string, scale int) (i
 
 func parseOpenAIImageSizePair(size string) (int, int, bool) {
 	size = strings.ToLower(strings.TrimSpace(size))
+	size = strings.NewReplacer(
+		"×", "x",
+		"＊", "x",
+		"*", "x",
+		"✕", "x",
+		"✖", "x",
+		" by ", "x",
+	).Replace(size)
 	parts := strings.Split(size, "x")
 	if len(parts) != 2 {
 		return 0, 0, false
