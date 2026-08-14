@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"strconv"
@@ -1230,13 +1231,20 @@ func isGPTImage1KSizeMode(mode string) bool {
 
 func resolveOpenAIImageSize1K(size string, aspectRatio string) (int, int, string, error) {
 	if width, height, ok := parseOpenAIImageSizePair(size); ok {
-		return scaleImageSizeTo1K(width, height)
+		return nearestGPTImage1KSize(float64(width) / float64(height))
 	}
-	width, height, _, err := resolveOpenAIImageSize(size, aspectRatio)
-	if err != nil {
-		return 1024, 1024, "1024x1024", nil
+	if ratio, ok := parseOpenAIAspectRatio(size); ok {
+		return nearestGPTImage1KSize(ratio)
 	}
-	return scaleImageSizeTo1K(width, height)
+	if strings.TrimSpace(size) == "" {
+		if ratio, ok := parseOpenAIAspectRatio(aspectRatio); ok {
+			return nearestGPTImage1KSize(ratio)
+		}
+		if width, height, _, err := resolveOpenAIImageSize("", aspectRatio); err == nil && width > 0 && height > 0 {
+			return nearestGPTImage1KSize(float64(width) / float64(height))
+		}
+	}
+	return 1024, 1024, "1024x1024", nil
 }
 
 func parseOpenAIImageSizePair(size string) (int, int, bool) {
@@ -1253,24 +1261,60 @@ func parseOpenAIImageSizePair(size string) (int, int, bool) {
 	return width, height, true
 }
 
-func scaleImageSizeTo1K(width, height int) (int, int, string, error) {
-	if width <= 0 || height <= 0 {
+func parseOpenAIAspectRatio(raw string) (float64, bool) {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	switch raw {
+	case "square":
+		return 1, true
+	case "landscape":
+		return 16.0 / 9.0, true
+	case "portrait":
+		return 9.0 / 16.0, true
+	}
+	parts := strings.Split(raw, ":")
+	if len(parts) != 2 {
+		return 0, false
+	}
+	left, lErr := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+	right, rErr := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+	if lErr != nil || rErr != nil || left <= 0 || right <= 0 {
+		return 0, false
+	}
+	return left / right, true
+}
+
+type gptImage1KPreset struct {
+	Ratio  float64
+	Width  int
+	Height int
+}
+
+var gptImage1KPresets = []gptImage1KPreset{
+	{Ratio: 1, Width: 1024, Height: 1024},
+	{Ratio: 2.0 / 3.0, Width: 848, Height: 1264},
+	{Ratio: 3.0 / 2.0, Width: 1264, Height: 848},
+	{Ratio: 4.0 / 5.0, Width: 928, Height: 1152},
+	{Ratio: 5.0 / 4.0, Width: 1152, Height: 928},
+	{Ratio: 9.0 / 16.0, Width: 768, Height: 1376},
+	{Ratio: 16.0 / 9.0, Width: 1376, Height: 768},
+	{Ratio: 21.0 / 9.0, Width: 1584, Height: 672},
+	{Ratio: 9.0 / 21.0, Width: 672, Height: 1584},
+}
+
+func nearestGPTImage1KSize(ratio float64) (int, int, string, error) {
+	if ratio <= 0 || math.IsNaN(ratio) || math.IsInf(ratio, 0) {
 		return 1024, 1024, "1024x1024", nil
 	}
-	maxDim := width
-	if height > maxDim {
-		maxDim = height
-	}
-	if maxDim > 1024 {
-		width = (width*1024 + maxDim/2) / maxDim
-		height = (height*1024 + maxDim/2) / maxDim
-		if width < 1 {
-			width = 1
-		}
-		if height < 1 {
-			height = 1
+	best := gptImage1KPresets[0]
+	bestDistance := math.Abs(math.Log(ratio / best.Ratio))
+	for _, preset := range gptImage1KPresets[1:] {
+		distance := math.Abs(math.Log(ratio / preset.Ratio))
+		if distance < bestDistance {
+			best = preset
+			bestDistance = distance
 		}
 	}
+	width, height := best.Width, best.Height
 	return width, height, fmt.Sprintf("%dx%d", width, height), nil
 }
 

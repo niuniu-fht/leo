@@ -1256,7 +1256,8 @@ func (s *Server) HandleLogsStats(w http.ResponseWriter, r *http.Request) {
 	if s.ReqLog == nil {
 		writeJSON(w, 200, map[string]interface{}{
 			"generated_images": 0, "generated_videos": 0,
-			"total_requests": 0, "failed_requests": 0,
+			"running_requests": 0,
+			"total_requests":   0, "failed_requests": 0,
 			"end_ts": float64(time.Now().Unix()),
 		})
 		return

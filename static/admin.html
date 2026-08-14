@@ -278,7 +278,7 @@
                     <option value="request">根据请求</option>
                     <option value="1k">1k</option>
                   </select>
-                  <p class="help text-secondary small mt-1">选择 1k 后，gpt-image-2 系列会把 size 解析后按最长边 1024 等比缩小；无法识别的 size 自动使用 1024x1024。选择“根据请求”则保持用户请求尺寸。</p>
+                  <p class="help text-secondary small mt-1">选择 1k 后，gpt-image-2 系列会先解析 size/aspect_ratio，匹配最接近的 1k 预设比例；无法识别的 size 自动使用 1024x1024。选择“根据请求”则保持用户请求尺寸。</p>
                 </div>
               </section>
 
@@ -452,6 +452,14 @@
                   <div class="card-body">
                     <div class="stat-label text-secondary small">视频生成数</div>
                     <div id="logsStatsVideoCount" class="stat-value h3 mb-0">-</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-6 col-md-3">
+                <div class="stat-card card">
+                  <div class="card-body">
+                    <div class="stat-label text-secondary small">进行中数量</div>
+                    <div id="logsStatsRunningCount" class="stat-value h3 mb-0">-</div>
                   </div>
                 </div>
               </div>

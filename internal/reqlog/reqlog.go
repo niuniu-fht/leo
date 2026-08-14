@@ -497,7 +497,7 @@ func (s *Store) Stats(rangeStr string) map[string]interface{} {
 	}
 
 	startTs := float64(startTime.Unix())
-	var images, videos, total, failed int
+	var images, videos, total, failed, running int
 
 	for _, e := range s.entries {
 		if e.Timestamp < startTs {
@@ -505,6 +505,9 @@ func (s *Store) Stats(rangeStr string) map[string]interface{} {
 		}
 		total++
 		taskStatus := normalizeTaskStatus(e.TaskStatus)
+		if taskStatus == "IN_PROGRESS" {
+			running++
+		}
 		if taskStatus == "FAILED" {
 			failed++
 		}
@@ -523,6 +526,7 @@ func (s *Store) Stats(rangeStr string) map[string]interface{} {
 	result := map[string]interface{}{
 		"generated_images": images,
 		"generated_videos": videos,
+		"running_requests": running,
 		"total_requests":   total,
 		"failed_requests":  failed,
 		"start_ts":         startTs,

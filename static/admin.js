@@ -1160,6 +1160,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const logStatsUpdatedAt = document.getElementById("logStatsUpdatedAt");
   const logsStatsImageCount = document.getElementById("logsStatsImageCount");
   const logsStatsVideoCount = document.getElementById("logsStatsVideoCount");
+  const logsStatsRunningCount = document.getElementById("logsStatsRunningCount");
   const logsStatsTotalCount = document.getElementById("logsStatsTotalCount");
   const logsStatsFailCount = document.getElementById("logsStatsFailCount");
   const logsPrevBtn = document.getElementById("logsPrevBtn");
@@ -2318,11 +2319,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   function renderLogStats(stats) {
     const imageCount = Number(stats?.generated_images || 0);
     const videoCount = Number(stats?.generated_videos || 0);
+    const runningCount = Number(stats?.running_requests ?? logsRunningTotal ?? 0);
     const totalCount = Number(stats?.total_requests || 0);
     const failCount = Number(stats?.failed_requests || 0);
 
     if (logsStatsImageCount) logsStatsImageCount.textContent = String(imageCount);
     if (logsStatsVideoCount) logsStatsVideoCount.textContent = String(videoCount);
+    if (logsStatsRunningCount) logsStatsRunningCount.textContent = String(runningCount);
     if (logsStatsTotalCount) logsStatsTotalCount.textContent = String(totalCount);
     if (logsStatsFailCount) logsStatsFailCount.textContent = String(failCount);
 
