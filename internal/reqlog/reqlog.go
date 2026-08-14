@@ -20,6 +20,7 @@ type Entry struct {
 	TaskStatus           string  `json:"task_status"` // "IN_PROGRESS", "COMPLETE", "FAILED"
 	Type                 string  `json:"type"`        // "image", "video"
 	InputMode            string  `json:"input_mode,omitempty"`
+	ReferenceCount       int     `json:"reference_count,omitempty"`
 	DurationSec          float64 `json:"duration_sec"`
 	TokenID              string  `json:"token_id,omitempty"`
 	TokenAttempt         int     `json:"token_attempt,omitempty"`

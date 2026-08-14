@@ -451,8 +451,9 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 	startTime := time.Now()
 	uploadCache := make(map[string]string)
 	refURLs := payload.referenceURLs()
+	imageReferenceCount := len(refURLs)
 	imageInputMode := "text_to_image"
-	if len(refURLs) > 0 {
+	if imageReferenceCount > 0 {
 		imageInputMode = "image_to_image"
 	}
 	imageOperation := "images.generations"
@@ -467,7 +468,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			if payload.ImageURL != "" && idx == 0 {
 				msg = fmt.Sprintf("invalid image_url: %v", err)
 			}
-			s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, imageInputMode, imageOperation, usedTokenID, session, time.Since(startTime).Seconds(), 400, msg)
+			s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, imageInputMode, imageOperation, imageReferenceCount, usedTokenID, session, time.Since(startTime).Seconds(), 400, msg)
 			writeJSON(w, 400, errorResp(msg, "invalid_request_error"))
 			return
 		}
@@ -504,7 +505,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			s.TokenMgr.ReportFail(usedTokenID)
 		}
 		msg := fmt.Sprintf("image generation failed: %v", err)
-		s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, imageInputMode, imageOperation, usedTokenID, session, time.Since(startTime).Seconds(), statusCode, msg)
+		s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, imageInputMode, imageOperation, imageReferenceCount, usedTokenID, session, time.Since(startTime).Seconds(), statusCode, msg)
 		writeJSON(w, statusCode, errorResp(msg, "server_error"))
 		return
 	}
@@ -518,6 +519,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			TaskStatus:           "IN_PROGRESS",
 			Type:                 "image",
 			InputMode:            imageInputMode,
+			ReferenceCount:       imageReferenceCount,
 			TokenID:              usedTokenID,
 			TokenAttempt:         1,
 			AccountName:          accountName,
@@ -1362,7 +1364,7 @@ func (s *Server) resolveImageGenerationModel(model string) (publicModelID string
 	return publicModelID, upstreamModelID, requestModel, quality
 }
 
-func (s *Server) logImageRequestFailure(prompt, modelID, quality, sizeLabel, inputMode, operation, tokenID string, session *leonardo.TokenSession, durationSec float64, statusCode int, errorMessage string) {
+func (s *Server) logImageRequestFailure(prompt, modelID, quality, sizeLabel, inputMode, operation string, referenceCount int, tokenID string, session *leonardo.TokenSession, durationSec float64, statusCode int, errorMessage string) {
 	if s == nil || s.ReqLog == nil {
 		return
 	}
@@ -1372,25 +1374,29 @@ func (s *Server) logImageRequestFailure(prompt, modelID, quality, sizeLabel, inp
 	if strings.TrimSpace(operation) == "" {
 		operation = "images.generations"
 	}
+	if referenceCount < 0 {
+		referenceCount = 0
+	}
 	accountName, accountEmail := s.resolveReqLogAccount(tokenID, session)
 	s.ReqLog.Add(reqlog.Entry{
-		ID:           fmt.Sprintf("img-fail-%d", time.Now().UnixNano()),
-		Timestamp:    float64(time.Now().Unix()),
-		StatusCode:   statusCode,
-		TaskStatus:   "FAILED",
-		Type:         "image",
-		InputMode:    inputMode,
-		TokenID:      tokenID,
-		TokenAttempt: 1,
-		AccountName:  accountName,
-		AccountEmail: accountEmail,
-		Model:        modelID,
-		ModelParams:  fmt.Sprintf("%s quality=%s", sizeLabel, quality),
-		Prompt:       prompt,
-		ErrorCode:    strconv.Itoa(statusCode),
-		ErrorMessage: errorMessage,
-		DurationSec:  durationSec,
-		Operation:    operation,
+		ID:             fmt.Sprintf("img-fail-%d", time.Now().UnixNano()),
+		Timestamp:      float64(time.Now().Unix()),
+		StatusCode:     statusCode,
+		TaskStatus:     "FAILED",
+		Type:           "image",
+		InputMode:      inputMode,
+		ReferenceCount: referenceCount,
+		TokenID:        tokenID,
+		TokenAttempt:   1,
+		AccountName:    accountName,
+		AccountEmail:   accountEmail,
+		Model:          modelID,
+		ModelParams:    fmt.Sprintf("%s quality=%s", sizeLabel, quality),
+		Prompt:         prompt,
+		ErrorCode:      strconv.Itoa(statusCode),
+		ErrorMessage:   errorMessage,
+		DurationSec:    durationSec,
+		Operation:      operation,
 	})
 }
 

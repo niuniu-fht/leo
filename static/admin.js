@@ -2374,7 +2374,11 @@ document.addEventListener("DOMContentLoaded", async () => {
         || inputMode === "edit"
         || operation.includes("edits")
         || path.includes("/v1/images/edits");
-      const label = isImageToImage ? "图生图" : "文生图";
+      const rawReferenceCount = Number(item?.reference_count || 0);
+      const referenceCount = Number.isFinite(rawReferenceCount) && rawReferenceCount > 0
+        ? Math.floor(rawReferenceCount)
+        : (isImageToImage ? 1 : 0);
+      const label = isImageToImage ? `图生图：${referenceCount}` : "文生图";
       const cls = isImageToImage ? "image-ref" : "image-text";
       return `<span class="log-type-badge ${cls}" title="${escapeHtml(label)}">${escapeHtml(label)}</span>`;
     }
