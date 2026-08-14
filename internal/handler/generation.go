@@ -1272,39 +1272,33 @@ func (s *Server) resolveImageRequestSize(publicModelID string, size string, aspe
 
 func (s *Server) resolveImageRequestSizeDetails(publicModelID string, size string, aspectRatio string) (imageSizeResolution, error) {
 	mode := s.imageSizeModeForModel(publicModelID)
-	if !isGPTImage1KSizeMode(mode) {
-		width, height, label, err := resolveOpenAIImageSize(size, aspectRatio)
-		if err != nil {
-			return imageSizeResolution{}, err
-		}
-		return imageSizeResolution{
-			Width:         width,
-			Height:        height,
-			Label:         label,
-			Mode:          "request",
-			OriginalLabel: label,
-			FinalLabel:    label,
-		}, nil
-	}
-
 	originalWidth, originalHeight, originalLabel, originalErr := resolveOpenAIImageSize(size, aspectRatio)
-	scale := imageSizeModeScale(mode)
-	finalWidth, finalHeight, finalLabel, err := resolveOpenAIImageSizeScaled(size, aspectRatio, scale)
-	if err != nil {
-		return imageSizeResolution{}, err
-	}
 	if originalErr != nil || originalWidth <= 0 || originalHeight <= 0 {
 		originalLabel = rawImageSizeInputLabel(size, aspectRatio)
 		if originalLabel == "" {
 			originalLabel = "未识别"
 		}
 	}
+
+	scale := imageSizeModeScale(mode)
+	resolvedMode := normalizeImageSizeScaleMode(mode)
+	if scale <= 0 {
+		// “根据请求”不再原样透传任意 size，而是先按用户 size/aspect_ratio 找到最接近的官方比例，
+		// 再根据用户传入尺寸的量级自动推断 1k / 2k / 4k。
+		scale = inferOpenAIImageSizeScale(size, aspectRatio)
+		resolvedMode = "request"
+	}
+
+	finalWidth, finalHeight, finalLabel, err := resolveOpenAIImageSizeScaled(size, aspectRatio, scale)
+	if err != nil {
+		return imageSizeResolution{}, err
+	}
 	transform := buildImageSizeTransform(originalWidth, originalHeight, originalLabel, finalWidth, finalHeight, finalLabel)
 	return imageSizeResolution{
 		Width:         finalWidth,
 		Height:        finalHeight,
 		Label:         finalLabel,
-		Mode:          normalizeImageSizeScaleMode(mode),
+		Mode:          resolvedMode,
 		OriginalLabel: originalLabel,
 		FinalLabel:    finalLabel,
 		Transform:     transform,
@@ -1417,6 +1411,60 @@ func gcdInt(a int, b int) int {
 	return a
 }
 
+func inferOpenAIImageSizeScale(size string, aspectRatio string) int {
+	if width, height, ok := parseOpenAIImageSizePair(size); ok {
+		return nearestGPTImageScaleForSize(width, height)
+	}
+	if _, ok := parseOpenAIAspectRatio(size); ok {
+		return 1
+	}
+	if strings.TrimSpace(size) == "" {
+		if _, ok := parseOpenAIAspectRatio(aspectRatio); ok {
+			return 1
+		}
+	}
+	return 1
+}
+
+func nearestGPTImageScaleForSize(width int, height int) int {
+	if width <= 0 || height <= 0 {
+		return 1
+	}
+	ratio := float64(width) / float64(height)
+	base := nearestGPTImage1KPreset(ratio)
+	requestArea := float64(width) * float64(height)
+	bestScale := 1
+	bestDistance := math.Inf(1)
+	for _, scale := range []int{1, 2, 4} {
+		candidateArea := float64(base.Width*scale) * float64(base.Height*scale)
+		if candidateArea <= 0 {
+			continue
+		}
+		distance := math.Abs(math.Log(requestArea / candidateArea))
+		if distance+1e-9 < bestDistance {
+			bestScale = scale
+			bestDistance = distance
+		}
+	}
+	return bestScale
+}
+
+func nearestGPTImage1KPreset(ratio float64) gptImage1KPreset {
+	if ratio <= 0 || math.IsNaN(ratio) || math.IsInf(ratio, 0) {
+		return gptImage1KPresets[0]
+	}
+	best := gptImage1KPresets[0]
+	bestDistance := math.Abs(math.Log(ratio / best.Ratio))
+	for _, preset := range gptImage1KPresets[1:] {
+		distance := math.Abs(math.Log(ratio / preset.Ratio))
+		if distance < bestDistance {
+			best = preset
+			bestDistance = distance
+		}
+	}
+	return best
+}
+
 func resolveOpenAIImageSizeScaled(size string, aspectRatio string, scale int) (int, int, string, error) {
 	if width, height, ok := parseOpenAIImageSizePair(size); ok {
 		return nearestGPTImageScaledSize(float64(width)/float64(height), scale)
@@ -1500,18 +1548,7 @@ var gptImage1KPresets = []gptImage1KPreset{
 }
 
 func nearestGPTImageScaledSize(ratio float64, scale int) (int, int, string, error) {
-	if ratio <= 0 || math.IsNaN(ratio) || math.IsInf(ratio, 0) {
-		return scaledImageSize(1024, 1024, scale)
-	}
-	best := gptImage1KPresets[0]
-	bestDistance := math.Abs(math.Log(ratio / best.Ratio))
-	for _, preset := range gptImage1KPresets[1:] {
-		distance := math.Abs(math.Log(ratio / preset.Ratio))
-		if distance < bestDistance {
-			best = preset
-			bestDistance = distance
-		}
-	}
+	best := nearestGPTImage1KPreset(ratio)
 	return scaledImageSize(best.Width, best.Height, scale)
 }
 

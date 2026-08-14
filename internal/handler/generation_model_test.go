@@ -145,7 +145,7 @@ func TestResolveGPTImageSizeMode1K(t *testing.T) {
 	}
 }
 
-func TestResolveBananaImageSizeIgnoresGPT1KMode(t *testing.T) {
+func TestResolveBananaImageSizeIgnoresGPTLegacyModeButNormalizesRequestSize(t *testing.T) {
 	cfg := config.New()
 	cfg.Set("gpt_image_size_mode", "1k")
 	s := &Server{Config: cfg}
@@ -153,8 +153,33 @@ func TestResolveBananaImageSizeIgnoresGPT1KMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveImageRequestSize banana error = %v", err)
 	}
-	if width != 1536 || height != 1536 || label != "1536x1536" {
-		t.Fatalf("banana size = %dx%d %q, want 1536x1536", width, height, label)
+	if width != 2048 || height != 2048 || label != "2048x2048" {
+		t.Fatalf("banana request-normalized size = %dx%d %q, want 2048x2048", width, height, label)
+	}
+}
+
+func TestResolveImageSizeRequestModeInfersScale(t *testing.T) {
+	cfg := config.New()
+	s := &Server{Config: cfg}
+	tests := []struct {
+		model      string
+		size       string
+		wantWidth  int
+		wantHeight int
+		wantLabel  string
+	}{
+		{model: "banana2", size: "1500x1000", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
+		{model: "bananapro", size: "2048x1632", wantWidth: 2304, wantHeight: 1856, wantLabel: "2304x1856"},
+		{model: "gpt-image-2-high", size: "4096x3264", wantWidth: 4608, wantHeight: 3712, wantLabel: "4608x3712"},
+	}
+	for _, tt := range tests {
+		width, height, label, err := s.resolveImageRequestSize(tt.model, tt.size, "")
+		if err != nil {
+			t.Fatalf("resolveImageRequestSize(%s, %q) error = %v", tt.model, tt.size, err)
+		}
+		if width != tt.wantWidth || height != tt.wantHeight || label != tt.wantLabel {
+			t.Fatalf("resolveImageRequestSize(%s, %q) = %dx%d %q, want %dx%d %q", tt.model, tt.size, width, height, label, tt.wantWidth, tt.wantHeight, tt.wantLabel)
+		}
 	}
 }
 
