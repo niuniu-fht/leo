@@ -170,6 +170,7 @@ func TestResolveImageSizeRequestModeInfersScale(t *testing.T) {
 	}{
 		{model: "banana2", size: "1500x1000", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
 		{model: "bananapro", size: "2048x1632", wantWidth: 2304, wantHeight: 1856, wantLabel: "2304x1856"},
+		{model: "gpt-image-2", size: "1536x2048", wantWidth: 1792, wantHeight: 2400, wantLabel: "1792x2400"},
 		{model: "gpt-image-2-high", size: "4096x3264", wantWidth: 4608, wantHeight: 3712, wantLabel: "4608x3712"},
 	}
 	for _, tt := range tests {
