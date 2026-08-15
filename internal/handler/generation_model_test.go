@@ -230,8 +230,21 @@ func TestResolveBananaAspectRatioRequestMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveImageRequestSize banana 3:4 error = %v", err)
 	}
-	if width != 896 || height != 1200 || label != "896x1200" {
-		t.Fatalf("banana 3:4 request size = %dx%d %q, want 896x1200", width, height, label)
+	if width != 1792 || height != 2400 || label != "1792x2400" {
+		t.Fatalf("banana 3:4 request size = %dx%d %q, want 1792x2400", width, height, label)
+	}
+}
+
+func TestResolveBananaAspectRatioRequestModeUses2KDefaultForRatioOnly(t *testing.T) {
+	cfg := config.New()
+	cfg.Set("image_size_mode_bananapro", "request")
+	s := &Server{Config: cfg}
+	width, height, label, err := s.resolveImageRequestSize("bananapro", "", "3:4")
+	if err != nil {
+		t.Fatalf("resolveImageRequestSize bananapro aspect_ratio 3:4 error = %v", err)
+	}
+	if width != 1792 || height != 2400 || label != "1792x2400" {
+		t.Fatalf("bananapro aspect_ratio 3:4 request size = %dx%d %q, want 1792x2400", width, height, label)
 	}
 }
 

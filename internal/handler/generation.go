@@ -1319,6 +1319,15 @@ func isGPTImagePublicModel(publicModelID string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(publicModelID)), "gpt-image-2")
 }
 
+func isBananaImagePublicModel(publicModelID string) bool {
+	switch strings.ToLower(strings.TrimSpace(publicModelID)) {
+	case "banana2", "bananapro":
+		return true
+	default:
+		return false
+	}
+}
+
 func isGPTImage1KSizeMode(mode string) bool {
 	return imageSizeModeScale(mode) > 0
 }
@@ -1408,10 +1417,16 @@ func inferOpenAIImageSizeScaleForModel(publicModelID string, size string, aspect
 		return nearestImageScaleForModelAndSize(publicModelID, width, height)
 	}
 	if _, ok := parseOpenAIAspectRatio(size); ok {
+		if isBananaImagePublicModel(publicModelID) {
+			return 2
+		}
 		return 1
 	}
 	if strings.TrimSpace(size) == "" {
 		if _, ok := parseOpenAIAspectRatio(aspectRatio); ok {
+			if isBananaImagePublicModel(publicModelID) {
+				return 2
+			}
 			return 1
 		}
 	}
