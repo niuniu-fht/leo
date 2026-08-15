@@ -67,6 +67,29 @@ func TestBananaProUsesGeminiImage2NativeRequest(t *testing.T) {
 	}
 }
 
+func TestImageNativeRequestOptionsWithReferences(t *testing.T) {
+	native, promptEnhance, styleIDs, omitQuality := imageNativeRequestOptions("bananapro", "gemini-image-2", false)
+	if !native || promptEnhance != "AUTO" || !omitQuality {
+		t.Fatalf("bananapro text native=%v promptEnhance=%q omitQuality=%v", native, promptEnhance, omitQuality)
+	}
+	if len(styleIDs) != 1 || styleIDs[0] != "111dc692-d470-4eec-b791-3475abac4c46" {
+		t.Fatalf("bananapro styleIDs = %#v", styleIDs)
+	}
+
+	native, promptEnhance, styleIDs, omitQuality = imageNativeRequestOptions("bananapro", "gemini-image-2", true)
+	if !native || promptEnhance != "OFF" || !omitQuality {
+		t.Fatalf("bananapro reference native=%v promptEnhance=%q omitQuality=%v", native, promptEnhance, omitQuality)
+	}
+	if len(styleIDs) != 1 || styleIDs[0] != "111dc692-d470-4eec-b791-3475abac4c46" {
+		t.Fatalf("bananapro reference styleIDs = %#v", styleIDs)
+	}
+
+	native, promptEnhance, _, omitQuality = imageNativeRequestOptions("gpt-image-2", "gpt-image-2", true)
+	if !native || promptEnhance != "OFF" || omitQuality {
+		t.Fatalf("gpt-image-2 reference native=%v promptEnhance=%q omitQuality=%v", native, promptEnhance, omitQuality)
+	}
+}
+
 func TestKnownImageAliasIgnoresGlobalRequestModel(t *testing.T) {
 	cfg := config.New()
 	cfg.Set("image_request_model", "nano-banana-2")

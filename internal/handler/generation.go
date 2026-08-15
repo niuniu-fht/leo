@@ -502,18 +502,9 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 		initImageIDs = append(initImageIDs, imageID)
 	}
 
-	nativeImageRequest := imageUsesNativeRequest(publicModelID)
-	promptEnhance := ""
-	styleIDs := []string(nil)
+	nativeImageRequest, promptEnhance, styleIDs, omitQuality := imageNativeRequestOptions(publicModelID, requestModel, len(initImageIDs) > 0)
 	requestQuality := quality
-	if nativeImageRequest {
-		promptEnhance = "OFF"
-		styleIDs = []string{"556c1ee5-ec38-42e8-955a-1e82dad0ffa1"}
-	}
-	if imageUsesGeminiImage2Request(publicModelID, requestModel) {
-		nativeImageRequest = true
-		promptEnhance = "AUTO"
-		styleIDs = []string{"111dc692-d470-4eec-b791-3475abac4c46"}
+	if omitQuality {
 		requestQuality = ""
 	}
 
@@ -1674,6 +1665,30 @@ func imageUsesNativeRequest(modelID string) bool {
 
 func imageUsesGeminiImage2Request(publicModelID string, requestModel string) bool {
 	return strings.ToLower(strings.TrimSpace(publicModelID)) == "bananapro" || strings.ToLower(strings.TrimSpace(requestModel)) == "gemini-image-2"
+}
+
+func imageNativeRequestOptions(publicModelID, requestModel string, hasImageReference bool) (bool, string, []string, bool) {
+	nativeImageRequest := imageUsesNativeRequest(publicModelID)
+	promptEnhance := ""
+	styleIDs := []string(nil)
+	omitQuality := false
+	if nativeImageRequest {
+		promptEnhance = "OFF"
+		styleIDs = []string{"556c1ee5-ec38-42e8-955a-1e82dad0ffa1"}
+	}
+	if imageUsesGeminiImage2Request(publicModelID, requestModel) {
+		nativeImageRequest = true
+		promptEnhance = "AUTO"
+		styleIDs = []string{"111dc692-d470-4eec-b791-3475abac4c46"}
+		omitQuality = true
+	}
+	if hasImageReference && nativeImageRequest {
+		// Leonardo's current image schema forces prompt_enhance=OFF whenever
+		// guidances.image_reference is present. Leaving Gemini Image 2 on AUTO
+		// makes the Generate mutation return the generic "An error occurred.".
+		promptEnhance = "OFF"
+	}
+	return nativeImageRequest, promptEnhance, styleIDs, omitQuality
 }
 
 func imageUsesAdobeClarity(modelID string) bool {
