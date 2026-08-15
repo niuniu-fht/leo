@@ -1286,11 +1286,11 @@ func (s *Server) resolveImageRequestSizeDetails(publicModelID string, size strin
 	if scale <= 0 {
 		// “根据请求”不再原样透传任意 size，而是先按用户 size/aspect_ratio 找到最接近的官方比例，
 		// 再根据用户传入尺寸的量级自动推断 1k / 2k / 4k。
-		scale = inferOpenAIImageSizeScale(size, aspectRatio)
+		scale = inferOpenAIImageSizeScaleForModel(publicModelID, size, aspectRatio)
 		resolvedMode = "request"
 	}
 
-	finalWidth, finalHeight, finalLabel, err := resolveOpenAIImageSizeScaled(size, aspectRatio, scale)
+	finalWidth, finalHeight, finalLabel, err := resolveOpenAIImageSizeScaledForModel(publicModelID, size, aspectRatio, scale)
 	if err != nil {
 		return imageSizeResolution{}, err
 	}
@@ -1412,9 +1412,9 @@ func gcdInt(a int, b int) int {
 	return a
 }
 
-func inferOpenAIImageSizeScale(size string, aspectRatio string) int {
+func inferOpenAIImageSizeScaleForModel(publicModelID string, size string, aspectRatio string) int {
 	if width, height, ok := parseOpenAIImageSizePair(size); ok {
-		return nearestGPTImageScaleForSize(width, height)
+		return nearestImageScaleForModelAndSize(publicModelID, width, height)
 	}
 	if _, ok := parseOpenAIAspectRatio(size); ok {
 		return 1
@@ -1427,17 +1427,17 @@ func inferOpenAIImageSizeScale(size string, aspectRatio string) int {
 	return 1
 }
 
-func nearestGPTImageScaleForSize(width int, height int) int {
+func nearestImageScaleForModelAndSize(publicModelID string, width int, height int) int {
 	if width <= 0 || height <= 0 {
 		return 1
 	}
 	ratio := float64(width) / float64(height)
-	base := nearestGPTImage1KPreset(ratio)
 	requestArea := float64(width) * float64(height)
 	bestScale := 1
 	bestDistance := math.Inf(1)
 	for _, scale := range []int{1, 2, 4} {
-		candidateArea := float64(base.Width*scale) * float64(base.Height*scale)
+		candidate := nearestImagePresetForModel(publicModelID, ratio, scale)
+		candidateArea := float64(candidate.Width) * float64(candidate.Height)
 		if candidateArea <= 0 {
 			continue
 		}
@@ -1450,13 +1450,16 @@ func nearestGPTImageScaleForSize(width int, height int) int {
 	return bestScale
 }
 
-func nearestGPTImage1KPreset(ratio float64) gptImage1KPreset {
-	if ratio <= 0 || math.IsNaN(ratio) || math.IsInf(ratio, 0) {
-		return gptImage1KPresets[0]
+func nearestImagePreset(presets []gptImagePreset, ratio float64) gptImagePreset {
+	if len(presets) == 0 {
+		return gptImagePreset{Ratio: 1, Width: 1024, Height: 1024}
 	}
-	best := gptImage1KPresets[0]
+	if ratio <= 0 || math.IsNaN(ratio) || math.IsInf(ratio, 0) {
+		return presets[0]
+	}
+	best := presets[0]
 	bestDistance := math.Abs(math.Log(ratio / best.Ratio))
-	for _, preset := range gptImage1KPresets[1:] {
+	for _, preset := range presets[1:] {
 		distance := math.Abs(math.Log(ratio / preset.Ratio))
 		if distance < bestDistance {
 			best = preset
@@ -1466,20 +1469,31 @@ func nearestGPTImage1KPreset(ratio float64) gptImage1KPreset {
 	return best
 }
 
-func resolveOpenAIImageSizeScaled(size string, aspectRatio string, scale int) (int, int, string, error) {
+func nearestImagePresetForModel(publicModelID string, ratio float64, scale int) gptImagePreset {
+	if isGPTImagePublicModel(publicModelID) {
+		return nearestImagePreset(gptImage2PresetsForScale(scale), ratio)
+	}
+	return nearestImagePreset(gptImageBananaPresetsForScale(scale), ratio)
+}
+
+func resolveOpenAIImageSizeScaledForModel(publicModelID string, size string, aspectRatio string, scale int) (int, int, string, error) {
 	if width, height, ok := parseOpenAIImageSizePair(size); ok {
-		return nearestGPTImageScaledSize(float64(width)/float64(height), scale)
+		return nearestImageScaledSizeForModel(publicModelID, float64(width)/float64(height), scale)
 	}
 	if ratio, ok := parseOpenAIAspectRatio(size); ok {
-		return nearestGPTImageScaledSize(ratio, scale)
+		return nearestImageScaledSizeForModel(publicModelID, ratio, scale)
 	}
 	if strings.TrimSpace(size) == "" {
 		if ratio, ok := parseOpenAIAspectRatio(aspectRatio); ok {
-			return nearestGPTImageScaledSize(ratio, scale)
+			return nearestImageScaledSizeForModel(publicModelID, ratio, scale)
 		}
 		if width, height, _, err := resolveOpenAIImageSize("", aspectRatio); err == nil && width > 0 && height > 0 {
-			return nearestGPTImageScaledSize(float64(width)/float64(height), scale)
+			return nearestImageScaledSizeForModel(publicModelID, float64(width)/float64(height), scale)
 		}
+	}
+	if isGPTImagePublicModel(publicModelID) {
+		preset := nearestImagePresetForModel(publicModelID, 1, scale)
+		return preset.Width, preset.Height, fmt.Sprintf("%dx%d", preset.Width, preset.Height), nil
 	}
 	return scaledImageSize(1024, 1024, scale)
 }
@@ -1528,13 +1542,13 @@ func parseOpenAIAspectRatio(raw string) (float64, bool) {
 	return left / right, true
 }
 
-type gptImage1KPreset struct {
+type gptImagePreset struct {
 	Ratio  float64
 	Width  int
 	Height int
 }
 
-var gptImage1KPresets = []gptImage1KPreset{
+var gptImageBanana1KPresets = []gptImagePreset{
 	{Ratio: 1, Width: 1024, Height: 1024},
 	{Ratio: 21.0 / 9.0, Width: 1582, Height: 672},
 	{Ratio: 9.0 / 21.0, Width: 672, Height: 1582},
@@ -1548,9 +1562,73 @@ var gptImage1KPresets = []gptImage1KPreset{
 	{Ratio: 4.0 / 5.0, Width: 928, Height: 1152},
 }
 
-func nearestGPTImageScaledSize(ratio float64, scale int) (int, int, string, error) {
-	best := nearestGPTImage1KPreset(ratio)
-	return scaledImageSize(best.Width, best.Height, scale)
+var gptImage2OfficialPresetsByScale = map[int][]gptImagePreset{
+	1: {
+		{Ratio: 1, Width: 1024, Height: 1024},
+		{Ratio: 21.0 / 9.0, Width: 1584, Height: 672},
+		{Ratio: 9.0 / 21.0, Width: 672, Height: 1584},
+		{Ratio: 16.0 / 9.0, Width: 1376, Height: 768},
+		{Ratio: 9.0 / 16.0, Width: 768, Height: 1376},
+		{Ratio: 3.0 / 2.0, Width: 1264, Height: 848},
+		{Ratio: 2.0 / 3.0, Width: 848, Height: 1264},
+		{Ratio: 4.0 / 3.0, Width: 1200, Height: 896},
+		{Ratio: 3.0 / 4.0, Width: 896, Height: 1200},
+		{Ratio: 5.0 / 4.0, Width: 1152, Height: 928},
+		{Ratio: 4.0 / 5.0, Width: 928, Height: 1152},
+	},
+	2: {
+		{Ratio: 1, Width: 2048, Height: 2048},
+		{Ratio: 21.0 / 9.0, Width: 2048, Height: 880},
+		{Ratio: 9.0 / 21.0, Width: 880, Height: 2048},
+		{Ratio: 16.0 / 9.0, Width: 2048, Height: 1152},
+		{Ratio: 9.0 / 16.0, Width: 1152, Height: 2048},
+		{Ratio: 3.0 / 2.0, Width: 2048, Height: 1360},
+		{Ratio: 2.0 / 3.0, Width: 1360, Height: 2048},
+		{Ratio: 4.0 / 3.0, Width: 2048, Height: 1536},
+		{Ratio: 3.0 / 4.0, Width: 1536, Height: 2048},
+		{Ratio: 5.0 / 4.0, Width: 2048, Height: 1632},
+		{Ratio: 4.0 / 5.0, Width: 1632, Height: 2048},
+	},
+	4: {
+		{Ratio: 1, Width: 3072, Height: 3072},
+		{Ratio: 21.0 / 9.0, Width: 3264, Height: 1392},
+		{Ratio: 9.0 / 21.0, Width: 1392, Height: 3264},
+		{Ratio: 16.0 / 9.0, Width: 3264, Height: 1840},
+		{Ratio: 9.0 / 16.0, Width: 1840, Height: 3264},
+		{Ratio: 3.0 / 2.0, Width: 3264, Height: 2176},
+		{Ratio: 2.0 / 3.0, Width: 2176, Height: 3264},
+		{Ratio: 4.0 / 3.0, Width: 3264, Height: 2448},
+		{Ratio: 3.0 / 4.0, Width: 2448, Height: 3264},
+		{Ratio: 5.0 / 4.0, Width: 3264, Height: 2608},
+		{Ratio: 4.0 / 5.0, Width: 2608, Height: 3264},
+	},
+}
+
+func gptImage2PresetsForScale(scale int) []gptImagePreset {
+	if presets, ok := gptImage2OfficialPresetsByScale[scale]; ok {
+		return presets
+	}
+	return gptImage2OfficialPresetsByScale[1]
+}
+
+func gptImageBananaPresetsForScale(scale int) []gptImagePreset {
+	if scale <= 0 {
+		scale = 1
+	}
+	out := make([]gptImagePreset, 0, len(gptImageBanana1KPresets))
+	for _, preset := range gptImageBanana1KPresets {
+		out = append(out, gptImagePreset{
+			Ratio:  preset.Ratio,
+			Width:  preset.Width * scale,
+			Height: preset.Height * scale,
+		})
+	}
+	return out
+}
+
+func nearestImageScaledSizeForModel(publicModelID string, ratio float64, scale int) (int, int, string, error) {
+	best := nearestImagePresetForModel(publicModelID, ratio, scale)
+	return best.Width, best.Height, fmt.Sprintf("%dx%d", best.Width, best.Height), nil
 }
 
 func scaledImageSize(width int, height int, scale int) (int, int, string, error) {

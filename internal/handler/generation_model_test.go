@@ -126,12 +126,12 @@ func TestResolveGPTImageSizeMode1K(t *testing.T) {
 		{size: "1152x928", aspectRatio: "", wantWidth: 1152, wantHeight: 928, wantLabel: "1152x928"},
 		{size: "768x1376", aspectRatio: "", wantWidth: 768, wantHeight: 1376, wantLabel: "768x1376"},
 		{size: "1376x768", aspectRatio: "", wantWidth: 1376, wantHeight: 768, wantLabel: "1376x768"},
-		{size: "1582x672", aspectRatio: "", wantWidth: 1582, wantHeight: 672, wantLabel: "1582x672"},
-		{size: "672x1582", aspectRatio: "", wantWidth: 672, wantHeight: 1582, wantLabel: "672x1582"},
+		{size: "1584x672", aspectRatio: "", wantWidth: 1584, wantHeight: 672, wantLabel: "1584x672"},
+		{size: "672x1584", aspectRatio: "", wantWidth: 672, wantHeight: 1584, wantLabel: "672x1584"},
 		{size: "2:3", aspectRatio: "", wantWidth: 848, wantHeight: 1264, wantLabel: "848x1264"},
 		{size: "3:2", aspectRatio: "", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
-		{size: "", aspectRatio: "21:9", wantWidth: 1582, wantHeight: 672, wantLabel: "1582x672"},
-		{size: "", aspectRatio: "9:21", wantWidth: 672, wantHeight: 1582, wantLabel: "672x1582"},
+		{size: "", aspectRatio: "21:9", wantWidth: 1584, wantHeight: 672, wantLabel: "1584x672"},
+		{size: "", aspectRatio: "9:21", wantWidth: 672, wantHeight: 1584, wantLabel: "672x1584"},
 		{size: "bad-size", aspectRatio: "", wantWidth: 1024, wantHeight: 1024, wantLabel: "1024x1024"},
 	}
 	for _, tt := range tests {
@@ -170,8 +170,10 @@ func TestResolveImageSizeRequestModeInfersScale(t *testing.T) {
 	}{
 		{model: "banana2", size: "1500x1000", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
 		{model: "bananapro", size: "2048x1632", wantWidth: 2304, wantHeight: 1856, wantLabel: "2304x1856"},
-		{model: "gpt-image-2", size: "1536x2048", wantWidth: 1792, wantHeight: 2400, wantLabel: "1792x2400"},
-		{model: "gpt-image-2-high", size: "4096x3264", wantWidth: 4608, wantHeight: 3712, wantLabel: "4608x3712"},
+		{model: "gpt-image-2", size: "1536x2048", wantWidth: 1536, wantHeight: 2048, wantLabel: "1536x2048"},
+		{model: "gpt-image-2", size: "1632x2048", wantWidth: 1632, wantHeight: 2048, wantLabel: "1632x2048"},
+		{model: "gpt-image-2", size: "2048x2048", wantWidth: 2048, wantHeight: 2048, wantLabel: "2048x2048"},
+		{model: "gpt-image-2-high", size: "4096x3264", wantWidth: 3264, wantHeight: 2608, wantLabel: "3264x2608"},
 	}
 	for _, tt := range tests {
 		width, height, label, err := s.resolveImageRequestSize(tt.model, tt.size, "")
@@ -228,8 +230,8 @@ func TestResolveImageSizeSpecificModeOverridesLegacyGPTMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveImageRequestSize high override error = %v", err)
 	}
-	if width != 1536 || height != 2752 || label != "1536x2752" {
-		t.Fatalf("gpt-image-2-high override size = %dx%d %q, want 1536x2752", width, height, label)
+	if width != 1840 || height != 3264 || label != "1840x3264" {
+		t.Fatalf("gpt-image-2-high override size = %dx%d %q, want 1840x3264", width, height, label)
 	}
 }
 
