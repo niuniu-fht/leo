@@ -171,9 +171,9 @@ func TestResolveImageSizeRequestModeInfersScale(t *testing.T) {
 		{model: "banana2", size: "1500x1000", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
 		{model: "bananapro", size: "2048x1632", wantWidth: 2304, wantHeight: 1856, wantLabel: "2304x1856"},
 		{model: "gpt-image-2", size: "1536x2048", wantWidth: 1536, wantHeight: 2048, wantLabel: "1536x2048"},
-		{model: "gpt-image-2", size: "1632x2048", wantWidth: 1632, wantHeight: 2048, wantLabel: "1632x2048"},
+		{model: "gpt-image-2", size: "1632x2048", wantWidth: 1648, wantHeight: 2048, wantLabel: "1648x2048"},
 		{model: "gpt-image-2", size: "2048x2048", wantWidth: 2048, wantHeight: 2048, wantLabel: "2048x2048"},
-		{model: "gpt-image-2-high", size: "4096x3264", wantWidth: 3264, wantHeight: 2608, wantLabel: "3264x2608"},
+		{model: "gpt-image-2-high", size: "4096x3264", wantWidth: 3200, wantHeight: 2560, wantLabel: "3200x2560"},
 	}
 	for _, tt := range tests {
 		width, height, label, err := s.resolveImageRequestSize(tt.model, tt.size, "")
@@ -196,6 +196,19 @@ func TestResolveBananaImageSizeSpecific1KMode(t *testing.T) {
 	}
 	if width != 768 || height != 1376 || label != "768x1376" {
 		t.Fatalf("banana 1k size = %dx%d %q, want 768x1376", width, height, label)
+	}
+}
+
+func TestResolveBananaAspectRatioRequestMode(t *testing.T) {
+	cfg := config.New()
+	cfg.Set("image_size_mode_banana2", "request")
+	s := &Server{Config: cfg}
+	width, height, label, err := s.resolveImageRequestSize("banana2", "3:4", "")
+	if err != nil {
+		t.Fatalf("resolveImageRequestSize banana 3:4 error = %v", err)
+	}
+	if width != 896 || height != 1200 || label != "896x1200" {
+		t.Fatalf("banana 3:4 request size = %dx%d %q, want 896x1200", width, height, label)
 	}
 }
 
@@ -230,8 +243,8 @@ func TestResolveImageSizeSpecificModeOverridesLegacyGPTMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveImageRequestSize high override error = %v", err)
 	}
-	if width != 1840 || height != 3264 || label != "1840x3264" {
-		t.Fatalf("gpt-image-2-high override size = %dx%d %q, want 1840x3264", width, height, label)
+	if width != 2016 || height != 3584 || label != "2016x3584" {
+		t.Fatalf("gpt-image-2-high override size = %dx%d %q, want 2016x3584", width, height, label)
 	}
 }
 
