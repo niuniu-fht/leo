@@ -1678,14 +1678,11 @@ func imageNativeRequestOptions(publicModelID, requestModel string, hasImageRefer
 	}
 	if imageUsesGeminiImage2Request(publicModelID, requestModel) {
 		nativeImageRequest = true
-		promptEnhance = "AUTO"
+		promptEnhance = "OFF"
 		styleIDs = []string{"111dc692-d470-4eec-b791-3475abac4c46"}
 		omitQuality = true
 	}
 	if hasImageReference && nativeImageRequest {
-		// Leonardo's current image schema forces prompt_enhance=OFF whenever
-		// guidances.image_reference is present. Leaving Gemini Image 2 on AUTO
-		// makes the Generate mutation return the generic "An error occurred.".
 		promptEnhance = "OFF"
 	}
 	return nativeImageRequest, promptEnhance, styleIDs, omitQuality

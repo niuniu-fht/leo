@@ -69,7 +69,7 @@ func TestBananaProUsesGeminiImage2NativeRequest(t *testing.T) {
 
 func TestImageNativeRequestOptionsWithReferences(t *testing.T) {
 	native, promptEnhance, styleIDs, omitQuality := imageNativeRequestOptions("bananapro", "gemini-image-2", false)
-	if !native || promptEnhance != "AUTO" || !omitQuality {
+	if !native || promptEnhance != "OFF" || !omitQuality {
 		t.Fatalf("bananapro text native=%v promptEnhance=%q omitQuality=%v", native, promptEnhance, omitQuality)
 	}
 	if len(styleIDs) != 1 || styleIDs[0] != "111dc692-d470-4eec-b791-3475abac4c46" {
