@@ -495,7 +495,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			if payload.ImageURL != "" && idx == 0 {
 				msg = fmt.Sprintf("invalid image_url: %v", err)
 			}
-			s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, sizeInfo.Transform, imageInputMode, imageOperation, imageReferenceCount, usedTokenID, session, time.Since(startTime).Seconds(), 400, msg)
+			s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, sizeInfo.TierLabel, sizeInfo.RatioLabel, sizeInfo.Transform, imageInputMode, imageOperation, imageReferenceCount, usedTokenID, session, time.Since(startTime).Seconds(), 400, msg)
 			writeJSON(w, 400, errorResp(msg, "invalid_request_error"))
 			return
 		}
@@ -530,7 +530,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			s.TokenMgr.ReportFail(usedTokenID)
 		}
 		msg := fmt.Sprintf("image generation failed: %v", err)
-		s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, sizeInfo.Transform, imageInputMode, imageOperation, imageReferenceCount, usedTokenID, session, time.Since(startTime).Seconds(), statusCode, msg)
+		s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, sizeInfo.TierLabel, sizeInfo.RatioLabel, sizeInfo.Transform, imageInputMode, imageOperation, imageReferenceCount, usedTokenID, session, time.Since(startTime).Seconds(), statusCode, msg)
 		writeJSON(w, statusCode, errorResp(msg, "server_error"))
 		return
 	}
@@ -551,6 +551,8 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			AccountEmail:         accountEmail,
 			Model:                publicModelID,
 			ModelParams:          fmt.Sprintf("%s quality=%s n=%d", sizeLabel, quality, payload.N),
+			SizeTier:             sizeInfo.TierLabel,
+			SizeRatio:            sizeInfo.RatioLabel,
 			SizeTransform:        sizeInfo.Transform,
 			Prompt:               payload.Prompt,
 			GenerationID:         result.GenerationID,
@@ -1249,6 +1251,8 @@ type imageSizeResolution struct {
 	Height        int
 	Label         string
 	Mode          string
+	TierLabel     string
+	RatioLabel    string
 	OriginalLabel string
 	FinalLabel    string
 	Transform     string
@@ -1291,6 +1295,8 @@ func (s *Server) resolveImageRequestSizeDetails(publicModelID string, size strin
 		Height:        finalHeight,
 		Label:         finalLabel,
 		Mode:          resolvedMode,
+		TierLabel:     imageSizeTierLabel(scale),
+		RatioLabel:    canonicalImageRatioLabel(finalWidth, finalHeight),
 		OriginalLabel: originalLabel,
 		FinalLabel:    finalLabel,
 		Transform:     transform,
@@ -1353,6 +1359,17 @@ func normalizeImageSizeScaleMode(mode string) string {
 	return fmt.Sprintf("%dk", scale)
 }
 
+func imageSizeTierLabel(scale int) string {
+	switch scale {
+	case 2:
+		return "2k"
+	case 4:
+		return "4k"
+	default:
+		return "1k"
+	}
+}
+
 func rawImageSizeInputLabel(size string, aspectRatio string) string {
 	size = strings.TrimSpace(size)
 	aspectRatio = strings.TrimSpace(aspectRatio)
@@ -1380,7 +1397,7 @@ func buildImageSizeTransform(originalWidth int, originalHeight int, originalLabe
 	}
 	finalRatio := "-"
 	if finalWidth > 0 && finalHeight > 0 {
-		finalRatio = imageRatioLabel(finalWidth, finalHeight)
+		finalRatio = canonicalImageRatioLabel(finalWidth, finalHeight)
 	}
 	if originalLabel == "" {
 		originalLabel = "未识别"
@@ -1394,6 +1411,40 @@ func imageRatioLabel(width int, height int) string {
 	}
 	divisor := gcdInt(width, height)
 	return fmt.Sprintf("%d:%d", width/divisor, height/divisor)
+}
+
+func canonicalImageRatioLabel(width int, height int) string {
+	if width <= 0 || height <= 0 {
+		return "-"
+	}
+	ratio := float64(width) / float64(height)
+	type ratioPreset struct {
+		label string
+		ratio float64
+	}
+	presets := []ratioPreset{
+		{label: "1:1", ratio: 1},
+		{label: "21:9", ratio: 21.0 / 9.0},
+		{label: "9:21", ratio: 9.0 / 21.0},
+		{label: "16:9", ratio: 16.0 / 9.0},
+		{label: "9:16", ratio: 9.0 / 16.0},
+		{label: "3:2", ratio: 3.0 / 2.0},
+		{label: "2:3", ratio: 2.0 / 3.0},
+		{label: "4:3", ratio: 4.0 / 3.0},
+		{label: "3:4", ratio: 3.0 / 4.0},
+		{label: "5:4", ratio: 5.0 / 4.0},
+		{label: "4:5", ratio: 4.0 / 5.0},
+	}
+	best := presets[0]
+	bestDistance := math.Abs(math.Log(ratio / best.ratio))
+	for _, preset := range presets[1:] {
+		distance := math.Abs(math.Log(ratio / preset.ratio))
+		if distance < bestDistance {
+			best = preset
+			bestDistance = distance
+		}
+	}
+	return best.label
 }
 
 func gcdInt(a int, b int) int {
@@ -1414,6 +1465,9 @@ func gcdInt(a int, b int) int {
 
 func inferOpenAIImageSizeScaleForModel(publicModelID string, size string, aspectRatio string) int {
 	if width, height, ok := parseOpenAIImageSizePair(size); ok {
+		if isGPTImagePublicModel(publicModelID) {
+			return gptImage2ScaleByRequestArea(width, height)
+		}
 		return nearestImageScaleForModelAndSize(publicModelID, width, height)
 	}
 	if _, ok := parseOpenAIAspectRatio(size); ok {
@@ -1431,6 +1485,21 @@ func inferOpenAIImageSizeScaleForModel(publicModelID string, size string, aspect
 		}
 	}
 	return 1
+}
+
+func gptImage2ScaleByRequestArea(width int, height int) int {
+	if width <= 0 || height <= 0 {
+		return 1
+	}
+	area := int64(width) * int64(height)
+	switch {
+	case area > 6000000:
+		return 4
+	case area > 3000000:
+		return 2
+	default:
+		return 1
+	}
 }
 
 func nearestImageScaleForModelAndSize(publicModelID string, width int, height int) int {
@@ -1767,7 +1836,7 @@ func (s *Server) resolveImageGenerationModel(model string) (publicModelID string
 	return publicModelID, upstreamModelID, requestModel, quality
 }
 
-func (s *Server) logImageRequestFailure(prompt, modelID, quality, sizeLabel, sizeTransform, inputMode, operation string, referenceCount int, tokenID string, session *leonardo.TokenSession, durationSec float64, statusCode int, errorMessage string) {
+func (s *Server) logImageRequestFailure(prompt, modelID, quality, sizeLabel, sizeTier, sizeRatio, sizeTransform, inputMode, operation string, referenceCount int, tokenID string, session *leonardo.TokenSession, durationSec float64, statusCode int, errorMessage string) {
 	if s == nil || s.ReqLog == nil {
 		return
 	}
@@ -1795,6 +1864,8 @@ func (s *Server) logImageRequestFailure(prompt, modelID, quality, sizeLabel, siz
 		AccountEmail:   accountEmail,
 		Model:          modelID,
 		ModelParams:    fmt.Sprintf("%s quality=%s", sizeLabel, quality),
+		SizeTier:       sizeTier,
+		SizeRatio:      sizeRatio,
 		SizeTransform:  sizeTransform,
 		Prompt:         prompt,
 		ErrorCode:      strconv.Itoa(statusCode),

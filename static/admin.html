@@ -283,7 +283,7 @@
                     <option value="2k">2k</option>
                     <option value="4k">4k</option>
                   </select>
-                  <p class="help text-secondary small mt-1">选择 1k/2k/4k 后，会先解析 size/aspect_ratio，匹配最接近的官方比例尺寸；2k/4k 在 1k 官方尺寸上按倍数放大。无法识别的 size 自动使用对应档位的 1:1。选择“根据请求”则保持用户请求尺寸。</p>
+                  <p class="help text-secondary small mt-1">选择 1k/2k/4k 后，会先解析 size/aspect_ratio，匹配最接近的官方比例尺寸。gpt-image-2 选择“根据请求”时按面积判档：>300w 为 2k，>600w 为 4k，再按比例映射到官方尺寸。</p>
                 </div>
 
                 <div class="config-inline-row d-flex flex-wrap gap-3 mb-3">
@@ -562,6 +562,7 @@
                     <th>时间</th>
                     <th>状态</th>
                     <th>类型</th>
+                    <th>尺寸档位</th>
                     <th>耗时/秒</th>
                     <th>进度</th>
                     <th>账号</th>
@@ -573,7 +574,7 @@
                 </thead>
                 <tbody>
                   <tr>
-                    <td colspan="10" class="empty-state text-secondary text-center py-4">暂无日志</td>
+                    <td colspan="11" class="empty-state text-secondary text-center py-4">暂无日志</td>
                   </tr>
                 </tbody>
               </table>

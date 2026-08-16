@@ -2369,7 +2369,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       statsPromise.then((statsData) => renderLogStats(statsData));
     } catch (err) {
-      logsTbody.innerHTML = `<tr><td colspan="10" class="empty-state" style="color: #ffb4bc;">${err.message || "日志加载失败"}</td></tr>`;
+      logsTbody.innerHTML = `<tr><td colspan="11" class="empty-state" style="color: #ffb4bc;">${err.message || "日志加载失败"}</td></tr>`;
       logsRunningTotal = 0;
       logsTotalPages = Math.max(1, logsCurrentPage || 1);
       renderLogsPagination();
@@ -2452,6 +2452,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     return `<span class="log-type-badge unknown" title="未知">-</span>`;
   }
 
+  function buildLogSizeTierBadge(item) {
+    const tierRaw = String(item?.size_tier || "").trim().toLowerCase();
+    const ratioRaw = String(item?.size_ratio || "").trim();
+    const tier = tierRaw === "4k" || tierRaw === "2k" || tierRaw === "1k" ? tierRaw : "";
+    if (!tier && !ratioRaw) {
+      return `<span style="color:#7f96ad;">-</span>`;
+    }
+    const tierLabel = tier ? tier.toUpperCase() : "?K";
+    const ratioLabel = ratioRaw || "-";
+    const text = `${tierLabel} · ${ratioLabel}`;
+    const tierClass = tier ? `tier-${tier}` : "tier-unknown";
+    return `<span class="log-size-tier-badge ${tierClass}" title="${escapeHtml(text)}"><span class="log-size-tier-icon" aria-hidden="true"></span>${escapeHtml(text)}</span>`;
+  }
+
   function buildLogRow(item, { forceInProgress = false } = {}) {
     const tr = document.createElement("tr");
     const dt = new Date((item.ts || 0) * 1000);
@@ -2494,6 +2508,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const stateContent = isFailed ? failedStateContent : `${stateIcon}<span>${stateLabel}</span>`;
     const statusCell = isFailed ? stateContent : `<span class="log-state ${stateClass}">${stateContent}</span>`;
     const typeCell = buildLogTypeBadge(item);
+    const sizeTierCell = buildLogSizeTierBadge(item);
     const taskProgressRaw = Number(item.task_progress);
     const progressCell = taskStatus === "IN_PROGRESS"
       ? `<span class="status-badge status-active">${Number.isFinite(taskProgressRaw) ? Math.round(taskProgressRaw) : 0}%</span>`
@@ -2548,6 +2563,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       <td class="log-time-cell"><span class="date">${dateText}</span><span class="time">${timeText}</span></td>
       <td>${statusCell}</td>
       <td>${typeCell}</td>
+      <td>${sizeTierCell}</td>
       <td style="color:#a8bfd8;">${escapeHtml(durationText)}</td>
       <td>${progressCell}</td>
       <td title="${tokenTitle}">${tokenCell}</td>
@@ -2585,7 +2601,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     ];
 
     if (!allRows.length) {
-      logsTbody.innerHTML = `<tr><td colspan="10" class="empty-state">暂无请求日志</td></tr>`;
+      logsTbody.innerHTML = `<tr><td colspan="11" class="empty-state">暂无请求日志</td></tr>`;
       return;
     }
 

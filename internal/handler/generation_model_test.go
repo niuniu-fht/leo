@@ -209,6 +209,34 @@ func TestResolveImageSizeRequestModeInfersScale(t *testing.T) {
 	}
 }
 
+func TestResolveGPTImage2RequestModeInfersScaleByArea(t *testing.T) {
+	cfg := config.New()
+	cfg.Set("image_size_mode_gpt_image_2", "request")
+	s := &Server{Config: cfg}
+	tests := []struct {
+		size       string
+		wantWidth  int
+		wantHeight int
+		wantTier   string
+		wantRatio  string
+	}{
+		{size: "1920x1080", wantWidth: 1376, wantHeight: 768, wantTier: "1k", wantRatio: "16:9"},
+		{size: "2000x1501", wantWidth: 2048, wantHeight: 1536, wantTier: "2k", wantRatio: "4:3"},
+		{size: "3000x2000", wantWidth: 2048, wantHeight: 1376, wantTier: "2k", wantRatio: "3:2"},
+		{size: "3000x2001", wantWidth: 3504, wantHeight: 2336, wantTier: "4k", wantRatio: "3:2"},
+	}
+	for _, tt := range tests {
+		info, err := s.resolveImageRequestSizeDetails("gpt-image-2", tt.size, "")
+		if err != nil {
+			t.Fatalf("resolveImageRequestSizeDetails(%q) error = %v", tt.size, err)
+		}
+		if info.Width != tt.wantWidth || info.Height != tt.wantHeight || info.TierLabel != tt.wantTier || info.RatioLabel != tt.wantRatio {
+			t.Fatalf("resolveImageRequestSizeDetails(%q) = %dx%d tier=%q ratio=%q, want %dx%d tier=%q ratio=%q",
+				tt.size, info.Width, info.Height, info.TierLabel, info.RatioLabel, tt.wantWidth, tt.wantHeight, tt.wantTier, tt.wantRatio)
+		}
+	}
+}
+
 func TestResolveBananaImageSizeSpecific1KMode(t *testing.T) {
 	cfg := config.New()
 	cfg.Set("image_size_mode_banana2", "1k")
@@ -279,8 +307,8 @@ func TestResolveImageSizeSpecificModeOverridesLegacyGPTMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveImageRequestSize high override error = %v", err)
 	}
-	if width != 2016 || height != 3584 || label != "2016x3584" {
-		t.Fatalf("gpt-image-2-high override size = %dx%d %q, want 2016x3584", width, height, label)
+	if width != 1136 || height != 2048 || label != "1136x2048" {
+		t.Fatalf("gpt-image-2-high override size = %dx%d %q, want 1136x2048", width, height, label)
 	}
 }
 
@@ -292,7 +320,7 @@ func TestResolveImageSizeDetailsTransform(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveImageRequestSizeDetails error = %v", err)
 	}
-	if info.Transform != "2048x1024（2:1）→ 1376x768（43:24）" {
+	if info.Transform != "2048x1024（2:1）→ 1376x768（16:9）" {
 		t.Fatalf("transform = %q", info.Transform)
 	}
 }

@@ -172,6 +172,43 @@ body {
   color: #ffca58;
   border-color: rgba(240, 192, 64, 0.3);
 }
+.log-size-tier-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 78px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+  white-space: nowrap;
+  border: 1px solid rgba(127, 150, 173, 0.28);
+  background: rgba(127, 150, 173, 0.12);
+  color: #b9c9dc;
+}
+.log-size-tier-icon {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+.log-size-tier-badge.tier-1k {
+  background: rgba(44, 199, 170, 0.12);
+  color: #4de2c4;
+  border-color: rgba(44, 199, 170, 0.3);
+}
+.log-size-tier-badge.tier-2k {
+  background: rgba(51, 161, 255, 0.14);
+  color: #7cc0ff;
+  border-color: rgba(51, 161, 255, 0.34);
+}
+.log-size-tier-badge.tier-4k {
+  background: rgba(240, 192, 64, 0.12);
+  color: #ffca58;
+  border-color: rgba(240, 192, 64, 0.3);
+}
 .log-state-btn {
   background: rgba(44, 199, 170, 0.12);
   color: #4de2c4;
