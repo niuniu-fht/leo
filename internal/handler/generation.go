@@ -1,9 +1,14 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"log"
 	"math"
@@ -13,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"leo2api/internal/config"
 	"leo2api/internal/provider/leonardo"
@@ -637,9 +643,11 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 	for _, imageURL := range finalURLs {
 		data = append(data, map[string]string{"url": imageURL})
 	}
+	usage := buildOpenAIImageUsage(payload.Prompt, refURLs, sizeInfo.Width, sizeInfo.Height, quality, publicModelID, s)
 	writeJSON(w, 200, map[string]interface{}{
 		"created": time.Now().Unix(),
 		"data":    data,
+		"usage":   usage,
 		"provider": map[string]interface{}{
 			"generation_id":     result.GenerationID,
 			"used_token_id":     usedTokenID,
@@ -652,6 +660,182 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			"postprocess":       postprocess,
 		},
 	})
+}
+
+func buildOpenAIImageUsage(prompt string, refURLs []string, width, height int, quality string, publicModelID string, s *Server) openAIImageUsage {
+	textTokens := estimateOpenAIImageTextTokens(prompt)
+	imageTokens := 0
+	if len(refURLs) > 0 && isGPTImagePublicModel(publicModelID) && s != nil {
+		imageTokens = s.estimateOpenAIImageReferenceTokens(refURLs)
+	}
+	outputTokens := calculateGPTImage2OutputTokens(width, height, quality)
+	inputTokens := textTokens + imageTokens
+	return openAIImageUsage{
+		InputTokens: inputTokens,
+		InputTokensDetails: openAIImageUsageInputTokenDetails{
+			TextTokens:  textTokens,
+			ImageTokens: imageTokens,
+		},
+		OutputTokens: outputTokens,
+		TotalTokens:  inputTokens + outputTokens,
+	}
+}
+
+func estimateOpenAIImageTextTokens(prompt string) int {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return 0
+	}
+
+	tokens := 0
+	var asciiWord strings.Builder
+	flushASCIIWord := func() {
+		if asciiWord.Len() == 0 {
+			return
+		}
+		tokens += 2
+		asciiWord.Reset()
+	}
+
+	for _, r := range prompt {
+		switch {
+		case unicode.IsSpace(r):
+			flushASCIIWord()
+		case isCJKRune(r):
+			flushASCIIWord()
+			tokens++
+		case unicode.IsLetter(r) || unicode.IsNumber(r):
+			if r < 128 {
+				asciiWord.WriteRune(r)
+			} else {
+				flushASCIIWord()
+				tokens++
+			}
+		case r == '\'' || r == '-' || r == '_' || r == '/':
+			if asciiWord.Len() > 0 {
+				asciiWord.WriteRune(r)
+			} else {
+				tokens++
+			}
+		default:
+			flushASCIIWord()
+			if unicode.IsPunct(r) || unicode.IsSymbol(r) {
+				tokens++
+			}
+		}
+	}
+	flushASCIIWord()
+	if tokens <= 0 {
+		return 1
+	}
+	return tokens
+}
+
+func isCJKRune(r rune) bool {
+	switch {
+	case r >= 0x4E00 && r <= 0x9FFF:
+		return true
+	case r >= 0x3400 && r <= 0x4DBF:
+		return true
+	case r >= 0x3040 && r <= 0x30FF:
+		return true
+	case r >= 0xAC00 && r <= 0xD7AF:
+		return true
+	default:
+		return false
+	}
+}
+
+func calculateGPTImage2OutputTokens(width, height int, quality string) int {
+	if width <= 0 || height <= 0 {
+		return 0
+	}
+	quality = strings.ToLower(strings.TrimSpace(quality))
+	qualityFactor := map[string]int{
+		"low":    16,
+		"medium": 48,
+		"high":   96,
+	}[quality]
+	if qualityFactor <= 0 {
+		qualityFactor = 16
+	}
+
+	longSide := math.Max(float64(width), float64(height))
+	shortSide := math.Min(float64(width), float64(height))
+	adjustedShort := int(math.Round(float64(qualityFactor) * shortSide / longSide))
+	upperFactor := qualityFactor
+	lowerFactor := adjustedShort
+	if width < height {
+		upperFactor, lowerFactor = adjustedShort, qualityFactor
+	}
+	r := upperFactor * lowerFactor
+	return int(math.Ceil(float64(r) * (2000000.0 + float64(width*height)) / 4000000.0))
+}
+
+func (s *Server) estimateOpenAIImageReferenceTokens(refURLs []string) int {
+	total := 0
+	for _, refURL := range refURLs {
+		tokens, err := s.estimateOpenAIImageReferenceTokensForRaw(refURL)
+		if err != nil {
+			continue
+		}
+		total += tokens
+	}
+	return total
+}
+
+func (s *Server) estimateOpenAIImageReferenceTokensForRaw(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+
+	if data, _, _, handled, err := decodeImageBase64Input(raw); handled {
+		if err != nil {
+			return 0, err
+		}
+		return calculateGPTImageReferenceInputTokensFromBytes(data)
+	}
+
+	data, _, _, err := s.downloadRemoteImage(raw)
+	if err != nil {
+		return 0, err
+	}
+	return calculateGPTImageReferenceInputTokensFromBytes(data)
+}
+
+func calculateGPTImageReferenceInputTokensFromBytes(data []byte) (int, error) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return 0, err
+	}
+	return calculateGPTImageReferenceInputTokens(cfg.Width, cfg.Height), nil
+}
+
+func calculateGPTImageReferenceInputTokens(width, height int) int {
+	if width <= 0 || height <= 0 {
+		return 0
+	}
+
+	shortSide := math.Min(float64(width), float64(height))
+	scale := 512.0 / shortSide
+	resizedWidth := int(math.Round(float64(width) * scale))
+	resizedHeight := int(math.Round(float64(height) * scale))
+	if resizedWidth < 1 {
+		resizedWidth = 1
+	}
+	if resizedHeight < 1 {
+		resizedHeight = 1
+	}
+
+	tileCount := int(math.Ceil(float64(resizedWidth)/512.0) * math.Ceil(float64(resizedHeight)/512.0))
+	tokens := 65 + 129*tileCount
+	if width == height {
+		tokens += 4160
+	} else {
+		tokens += 6240
+	}
+	return tokens
 }
 
 // HandleChatCompletions handles POST /v1/chat/completions.
@@ -1256,6 +1440,18 @@ type imageSizeResolution struct {
 	OriginalLabel string
 	FinalLabel    string
 	Transform     string
+}
+
+type openAIImageUsageInputTokenDetails struct {
+	TextTokens  int `json:"text_tokens"`
+	ImageTokens int `json:"image_tokens"`
+}
+
+type openAIImageUsage struct {
+	InputTokens        int                               `json:"input_tokens"`
+	InputTokensDetails openAIImageUsageInputTokenDetails `json:"input_tokens_details"`
+	OutputTokens       int                               `json:"output_tokens"`
+	TotalTokens        int                               `json:"total_tokens"`
 }
 
 func (s *Server) resolveImageRequestSize(publicModelID string, size string, aspectRatio string) (int, int, string, error) {

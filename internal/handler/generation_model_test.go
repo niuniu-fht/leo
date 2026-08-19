@@ -325,6 +325,25 @@ func TestResolveImageSizeDetailsTransform(t *testing.T) {
 	}
 }
 
+func TestCalculateGPTImage2OutputTokensOfficialCalculator(t *testing.T) {
+	if got := calculateGPTImage2OutputTokens(1024, 1024, "low"); got != 196 {
+		t.Fatalf("calculateGPTImage2OutputTokens(1024,1024,low) = %d, want 196", got)
+	}
+	if got := calculateGPTImage2OutputTokens(1536, 1024, "low"); got != 158 {
+		t.Fatalf("calculateGPTImage2OutputTokens(1536,1024,low) = %d, want 158", got)
+	}
+	if got := calculateGPTImage2OutputTokens(1024, 1024, "medium"); got != 1756 {
+		t.Fatalf("calculateGPTImage2OutputTokens(1024,1024,medium) = %d, want 1756", got)
+	}
+}
+
+func TestBuildOpenAIImageUsageMatchesOfficialExample(t *testing.T) {
+	usage := buildOpenAIImageUsage("a cute girl", nil, 1024, 1024, "low", "gpt-image-2", &Server{})
+	if usage.InputTokens != 6 || usage.InputTokensDetails.TextTokens != 6 || usage.InputTokensDetails.ImageTokens != 0 || usage.OutputTokens != 196 || usage.TotalTokens != 202 {
+		t.Fatalf("usage = %#v, want input=6 text=6 image=0 output=196 total=202", usage)
+	}
+}
+
 func TestOpenAIImageReferenceURLs(t *testing.T) {
 	req := openAIImageGenerationRequest{
 		ImageURL:     " https://example.com/a.png ",
