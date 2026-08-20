@@ -91,6 +91,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   const taskReportItems = document.getElementById("taskReportItems");
   const tokenSelectAll = document.getElementById("tokenSelectAll");
   const tbody = document.querySelector("#tokenTable tbody");
+  const tokenTotalCreditsCard = document.getElementById("tokenTotalCreditsCard");
+  const tokenOneKCountCard = document.getElementById("tokenOneKCountCard");
+  const tokenTwoKCountCard = document.getElementById("tokenTwoKCountCard");
   const tokenTotalCount = document.getElementById("tokenTotalCount");
   const tokenActiveCount = document.getElementById("tokenActiveCount");
   const tokenFilteredCount = document.getElementById("tokenFilteredCount");
@@ -226,6 +229,41 @@ document.addEventListener("DOMContentLoaded", async () => {
     return Array.isArray(tokens) ? tokens : [];
   }
 
+  function parseCreditValue(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function formatDashboardInteger(value) {
+    const n = Math.max(0, Math.floor(parseCreditValue(value)));
+    return n.toLocaleString("zh-CN");
+  }
+
+  function sumTokenCredits(tokens) {
+    if (!Array.isArray(tokens)) return 0;
+    return tokens.reduce((sum, token) => {
+      const err = String(token?.credits_error || "").trim();
+      if (err) return sum;
+      return sum + Math.max(0, parseCreditValue(token?.credits_available ?? token?.credits));
+    }, 0);
+  }
+
+  function renderTokenCreditDashboard(tokens, summary = null) {
+    const totalCredits = Number.isFinite(Number(summary?.total_credits))
+      ? Number(summary.total_credits)
+      : sumTokenCredits(tokens);
+    const oneKCount = Number.isFinite(Number(summary?.image_1k_count))
+      ? Number(summary.image_1k_count)
+      : Math.floor(totalCredits / 8);
+    const twoKCount = Number.isFinite(Number(summary?.image_2k_count))
+      ? Number(summary.image_2k_count)
+      : Math.floor(totalCredits / 20);
+
+    if (tokenTotalCreditsCard) tokenTotalCreditsCard.textContent = formatDashboardInteger(totalCredits);
+    if (tokenOneKCountCard) tokenOneKCountCard.textContent = formatDashboardInteger(oneKCount);
+    if (tokenTwoKCountCard) tokenTwoKCountCard.textContent = formatDashboardInteger(twoKCount);
+  }
+
   function renderTokenSummary(tokens, summary = null, pagination = null) {
     const list = Array.isArray(tokens) ? tokens : [];
     const fallbackTotal = list.length;
@@ -240,6 +278,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (tokenTotalCount) tokenTotalCount.textContent = String(total);
     if (tokenActiveCount) tokenActiveCount.textContent = String(active);
     if (tokenFilteredCount) tokenFilteredCount.textContent = String(filtered);
+    renderTokenCreditDashboard(list, summary);
     updateTokenSelectionSummary();
   }
 

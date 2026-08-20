@@ -125,9 +125,32 @@ func (s *Server) HandleTokenList(w http.ResponseWriter, r *http.Request) {
 		filtered = tmp
 	}
 	_ = creditsFilter // Credits filter can be added later
+	filtered = append([]map[string]interface{}{}, filtered...)
+	sort.SliceStable(filtered, func(i, j int) bool {
+		leftCredits, leftKnown := tokenCreditsForListSort(filtered[i])
+		rightCredits, rightKnown := tokenCreditsForListSort(filtered[j])
+		if leftKnown != rightKnown {
+			return leftKnown
+		}
+		if leftCredits != rightCredits {
+			return leftCredits > rightCredits
+		}
+		return tokenListSortKey(filtered[i]) < tokenListSortKey(filtered[j])
+	})
 
 	// Stats from all tokens
 	stats := s.TokenMgr.Stats()
+	totalCredits := 0.0
+	for _, t := range allTokens {
+		if rawErr, ok := t["credits_error"]; ok && rawErr != nil && strings.TrimSpace(fmt.Sprintf("%v", rawErr)) != "" {
+			continue
+		}
+		if credits, ok := tokenCreditsAvailable(t); ok && credits > 0 {
+			totalCredits += credits
+		}
+	}
+	oneKCount := int64(totalCredits / 8)
+	twoKCount := int64(totalCredits / 20)
 
 	// Pagination
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
@@ -163,9 +186,12 @@ func (s *Server) HandleTokenList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{
 		"tokens": pageTokens,
 		"summary": map[string]interface{}{
-			"total":    stats["total"],
-			"active":   stats["active"],
-			"filtered": total,
+			"total":          stats["total"],
+			"active":         stats["active"],
+			"filtered":       total,
+			"total_credits":  totalCredits,
+			"image_1k_count": oneKCount,
+			"image_2k_count": twoKCount,
 		},
 		"pagination": map[string]interface{}{
 			"page":        page,
@@ -174,6 +200,33 @@ func (s *Server) HandleTokenList(w http.ResponseWriter, r *http.Request) {
 			"total_pages": totalPages,
 		},
 	})
+}
+
+func tokenCreditsForListSort(info map[string]interface{}) (float64, bool) {
+	if info == nil {
+		return 0, false
+	}
+	if rawErr, ok := info["credits_error"]; ok && rawErr != nil && strings.TrimSpace(fmt.Sprintf("%v", rawErr)) != "" {
+		return 0, false
+	}
+	credits, ok := tokenCreditsAvailable(info)
+	if !ok {
+		return 0, false
+	}
+	return credits, true
+}
+
+func tokenListSortKey(info map[string]interface{}) string {
+	if info == nil {
+		return ""
+	}
+	for _, key := range []string{"email", "account", "id"} {
+		value := strings.TrimSpace(fmt.Sprintf("%v", info[key]))
+		if value != "" && value != "<nil>" {
+			return strings.ToLower(value)
+		}
+	}
+	return ""
 }
 
 // HandleTokenAdd handles POST /api/v1/tokens.

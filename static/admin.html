@@ -51,10 +51,29 @@
               <div class="card-header">
                 <h3 class="card-title mb-0">快捷操作</h3>
               </div>
-              <div class="card-body">
-                <div class="d-flex flex-wrap gap-2">
-                  <button id="openAddTokenModalBtn" class="btn btn-primary">添加 Token</button>
-                  <button id="openCookieImportBtn" class="btn btn-outline-secondary">导入 Cookie</button>
+              <div class="card-body token-dashboard-body">
+                <div class="quick-actions-panel">
+                  <div class="d-flex flex-wrap gap-2">
+                    <button id="openAddTokenModalBtn" class="btn btn-primary">添加 Token</button>
+                    <button id="openCookieImportBtn" class="btn btn-outline-secondary">导入 Cookie</button>
+                  </div>
+                </div>
+                <div class="token-dashboard-cards" aria-label="Token 积分概览">
+                  <div class="token-dashboard-card">
+                    <span class="token-dashboard-label">总积分</span>
+                    <strong id="tokenTotalCreditsCard" class="token-dashboard-value">0</strong>
+                    <small class="token-dashboard-hint">账号池可用积分合计</small>
+                  </div>
+                  <div class="token-dashboard-card">
+                    <span class="token-dashboard-label">1k 张数</span>
+                    <strong id="tokenOneKCountCard" class="token-dashboard-value">0</strong>
+                    <small class="token-dashboard-hint">按 8 积分/张估算</small>
+                  </div>
+                  <div class="token-dashboard-card">
+                    <span class="token-dashboard-label">2k 张数</span>
+                    <strong id="tokenTwoKCountCard" class="token-dashboard-value">0</strong>
+                    <small class="token-dashboard-hint">按 20 积分/张估算</small>
+                  </div>
                 </div>
               </div>
             </div>
