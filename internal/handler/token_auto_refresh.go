@@ -325,15 +325,11 @@ func (s *Server) shouldRunTokenAutoRefresh(item map[string]interface{}, tokenID 
 }
 
 func (s *Server) shouldRunTokenRenewalRecovery(item map[string]interface{}, tokenID string, now time.Time) bool {
-	renewalRaw := strings.TrimSpace(toString(item["token_renewal_date"]))
-	if renewalRaw == "" {
-		return false
-	}
-	renewalTime, ok := parseLeonardoTokenRenewalDate(renewalRaw)
-	if !ok || now.Before(renewalTime) {
-		return false
-	}
-
+	// Exhausted-token recovery is intentionally time-window based rather than
+	// tokenRenewalDate based: Leonardo's tokenRenewalDate may represent account
+	// or cookie/subscription metadata, so we probe exhausted accounts every 30
+	// minutes and restore only when the refreshed credits cross the configured
+	// exhaustion threshold.
 	s.autoRefreshMu.Lock()
 	defer s.autoRefreshMu.Unlock()
 	if s.autoRefreshRun == nil {
@@ -343,26 +339,6 @@ func (s *Server) shouldRunTokenRenewalRecovery(item map[string]interface{}, toke
 		return false
 	}
 	return true
-}
-
-func parseLeonardoTokenRenewalDate(value string) (time.Time, bool) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return time.Time{}, false
-	}
-	layouts := []string{
-		time.RFC3339Nano,
-		time.RFC3339,
-		"2006-01-02T15:04:05.000Z",
-		"2006-01-02 15:04:05",
-		"2006-01-02 15:04",
-	}
-	for _, layout := range layouts {
-		if parsed, err := time.Parse(layout, value); err == nil {
-			return parsed, true
-		}
-	}
-	return time.Time{}, false
 }
 
 func (s *Server) beginTokenAutoRefresh(tokenID string, now time.Time) bool {
