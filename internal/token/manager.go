@@ -44,6 +44,7 @@ type Token struct {
 	RefreshProfileID   string  `json:"refresh_profile_id,omitempty"`
 	RefreshProfileName string  `json:"refresh_profile_name,omitempty"`
 	ExpiresAt          float64 `json:"expires_at,omitempty"`
+	TokenRenewalDate   string  `json:"token_renewal_date,omitempty"`
 	Credits            float64 `json:"credits,omitempty"`
 	MaxCredits         float64 `json:"max_credits,omitempty"`
 }
@@ -1056,12 +1057,38 @@ func (m *Manager) SetAutoRefresh(tokenID string, enabled bool) error {
 
 // UpdateCredits updates the credits info for a token by ID.
 func (m *Manager) UpdateCredits(tokenID string, credits, maxCredits float64) error {
+	return m.UpdateCreditsWithRenewalDate(tokenID, credits, maxCredits, "")
+}
+
+// UpdateCreditsWithRenewalDate updates the credits and next renewal time for a token by ID.
+func (m *Manager) UpdateCreditsWithRenewalDate(tokenID string, credits, maxCredits float64, renewalDate string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, t := range m.tokens {
 		if t.ID == tokenID {
 			t.Credits = credits
 			t.MaxCredits = maxCredits
+			if strings.TrimSpace(renewalDate) != "" {
+				t.TokenRenewalDate = strings.TrimSpace(renewalDate)
+			}
+			m.save()
+			return nil
+		}
+	}
+	return fmt.Errorf("token not found")
+}
+
+// UpdateTokenRenewalDate updates the next credit renewal time for a token by ID.
+func (m *Manager) UpdateTokenRenewalDate(tokenID string, renewalDate string) error {
+	renewalDate = strings.TrimSpace(renewalDate)
+	if renewalDate == "" {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, t := range m.tokens {
+		if t.ID == tokenID {
+			t.TokenRenewalDate = renewalDate
 			m.save()
 			return nil
 		}
@@ -1201,6 +1228,14 @@ func tokenToSummary(t *Token) map[string]interface{} {
 		m["credits_available"] = t.Credits
 		m["credits_total"] = t.MaxCredits
 	}
+	if strings.TrimSpace(t.TokenRenewalDate) != "" {
+		m["token_renewal_date"] = strings.TrimSpace(t.TokenRenewalDate)
+		if renewalTime, ok := parseTokenRenewalDate(t.TokenRenewalDate); ok {
+			m["token_renewal_at"] = float64(renewalTime.Unix())
+			m["token_renewal_date_text"] = renewalTime.In(time.FixedZone("CST", 8*3600)).Format("2006-01-02 15:04")
+		}
+	}
+
 	// Expiry info for frontend
 	if t.ExpiresAt > 0 {
 		remaining := t.ExpiresAt - now
@@ -1211,6 +1246,26 @@ func tokenToSummary(t *Token) map[string]interface{} {
 		m["expires_at_text"] = expTime.Format("2006-01-02 15:04")
 	}
 	return m
+}
+
+func parseTokenRenewalDate(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02T15:04:05.000Z",
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04",
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func clearRefreshFailureLocked(t *Token) {

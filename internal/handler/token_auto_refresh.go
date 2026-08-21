@@ -10,6 +10,7 @@ import (
 )
 
 const autoRefreshRetryCooldown = time.Minute
+const tokenRenewalRecoveryRetryCooldown = 30 * time.Minute
 const tokenRefreshFailureThreshold = 2
 
 // StartTokenAutoRefreshLoop starts the background Leonardo token refresh sweep.
@@ -79,11 +80,24 @@ func (s *Server) runTokenAutoRefreshSweep() {
 		if strings.ToLower(strings.TrimSpace(toString(item["platform"]))) != "leonardo" {
 			continue
 		}
-		if !toBool(item["auto_refresh"]) {
+		status := strings.ToLower(strings.TrimSpace(toString(item["status"])))
+		if status == "disabled" {
 			continue
 		}
-		status := strings.ToLower(strings.TrimSpace(toString(item["status"])))
-		if status == "disabled" || status == "exhausted" {
+		if status == "exhausted" {
+			if !s.shouldRunTokenRenewalRecovery(item, tokenID, now) {
+				continue
+			}
+			sem <- struct{}{}
+			wg.Add(1)
+			go func(id string) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				s.refreshLeonardoTokenByIDForRenewalRecovery(id)
+			}(tokenID)
+			continue
+		}
+		if !toBool(item["auto_refresh"]) {
 			continue
 		}
 
@@ -162,6 +176,14 @@ func (s *Server) tokenImportRefreshConcurrency() int {
 }
 
 func (s *Server) refreshLeonardoTokenByID(tokenID string) {
+	s.refreshLeonardoTokenByIDWithOptions(tokenID, false)
+}
+
+func (s *Server) refreshLeonardoTokenByIDForRenewalRecovery(tokenID string) {
+	s.refreshLeonardoTokenByIDWithOptions(tokenID, true)
+}
+
+func (s *Server) refreshLeonardoTokenByIDWithOptions(tokenID string, allowExhaustedRecovery bool) {
 	if s == nil || s.TokenMgr == nil || s.LeonardoClient == nil {
 		return
 	}
@@ -183,9 +205,10 @@ func (s *Server) refreshLeonardoTokenByID(tokenID string) {
 	}
 
 	status := strings.ToLower(strings.TrimSpace(toString(info["status"])))
-	if status == "disabled" || status == "exhausted" {
+	if status == "disabled" || (status == "exhausted" && !allowExhaustedRecovery) {
 		return
 	}
+	wasExhausted := status == "exhausted"
 
 	rawToken := strings.TrimSpace(toString(info["value"]))
 	if rawToken == "" {
@@ -205,7 +228,21 @@ func (s *Server) refreshLeonardoTokenByID(tokenID string) {
 		return
 	}
 
-	s.restoreTokenAfterSuccessfulRefresh(tokenID)
+	shouldRestore := !wasExhausted
+	if wasExhausted && credits != nil {
+		threshold := float64(s.tokenExhaustionCreditThreshold())
+		shouldRestore = float64(credits.TotalTokens) >= threshold
+		if !shouldRestore {
+			log.Printf("[token] renewal recovery checked for %s, credits %d below threshold %.0f", tokenID, credits.TotalTokens, threshold)
+		}
+	}
+	if shouldRestore {
+		s.restoreTokenAfterSuccessfulRefresh(tokenID)
+		if wasExhausted {
+			_ = s.TokenMgr.SetAutoRefresh(tokenID, true)
+			log.Printf("[token] renewed exhausted token %s restored after credits refresh", tokenID)
+		}
+	}
 	if err := s.TokenMgr.UpdateAccountInfo(tokenID, session.HasuraUserID, session.Email); err != nil {
 		log.Printf("[token] auto-refresh failed to update account info for %s: %v", tokenID, err)
 	}
@@ -214,7 +251,7 @@ func (s *Server) refreshLeonardoTokenByID(tokenID string) {
 	}
 	if credits != nil {
 		totalCredits := float64(credits.SubscriptionTokens + credits.PaidTokens + credits.RolloverTokens)
-		if err := s.TokenMgr.UpdateCredits(tokenID, float64(credits.TotalTokens), totalCredits); err != nil {
+		if err := s.TokenMgr.UpdateCreditsWithRenewalDate(tokenID, float64(credits.TotalTokens), totalCredits, credits.TokenRenewalDate); err != nil {
 			log.Printf("[token] auto-refresh failed to update credits for %s: %v", tokenID, err)
 		}
 	}
@@ -285,6 +322,47 @@ func (s *Server) shouldRunTokenAutoRefresh(item map[string]interface{}, tokenID 
 		return false
 	}
 	return true
+}
+
+func (s *Server) shouldRunTokenRenewalRecovery(item map[string]interface{}, tokenID string, now time.Time) bool {
+	renewalRaw := strings.TrimSpace(toString(item["token_renewal_date"]))
+	if renewalRaw == "" {
+		return false
+	}
+	renewalTime, ok := parseLeonardoTokenRenewalDate(renewalRaw)
+	if !ok || now.Before(renewalTime) {
+		return false
+	}
+
+	s.autoRefreshMu.Lock()
+	defer s.autoRefreshMu.Unlock()
+	if s.autoRefreshRun == nil {
+		s.autoRefreshRun = make(map[string]time.Time)
+	}
+	if last, ok := s.autoRefreshRun[tokenID]; ok && !last.IsZero() && now.Sub(last) < tokenRenewalRecoveryRetryCooldown {
+		return false
+	}
+	return true
+}
+
+func parseLeonardoTokenRenewalDate(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02T15:04:05.000Z",
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04",
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func (s *Server) beginTokenAutoRefresh(tokenID string, now time.Time) bool {

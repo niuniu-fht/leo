@@ -295,7 +295,7 @@ func (s *Server) HandleTokenAdd(w http.ResponseWriter, r *http.Request) {
 				if tokenID != "" {
 					s.TokenMgr.UpdateAccountInfo(tokenID, session.HasuraUserID, session.Email)
 					if credits != nil {
-						s.TokenMgr.UpdateCredits(tokenID, float64(credits.TotalTokens), float64(credits.SubscriptionTokens+credits.PaidTokens+credits.RolloverTokens))
+						s.TokenMgr.UpdateCreditsWithRenewalDate(tokenID, float64(credits.TotalTokens), float64(credits.SubscriptionTokens+credits.PaidTokens+credits.RolloverTokens), credits.TokenRenewalDate)
 						s.TokenMgr.UpdateExpiry(tokenID, float64(session.JWTExpiry.Unix()))
 					}
 				}
@@ -492,7 +492,7 @@ func (s *Server) validateLeonardoTokenAsync(tokenID, rawToken string) {
 	}
 	if credits != nil {
 		totalCredits := float64(credits.SubscriptionTokens + credits.PaidTokens + credits.RolloverTokens)
-		if err := s.TokenMgr.UpdateCredits(tokenID, float64(credits.TotalTokens), totalCredits); err != nil {
+		if err := s.TokenMgr.UpdateCreditsWithRenewalDate(tokenID, float64(credits.TotalTokens), totalCredits, credits.TokenRenewalDate); err != nil {
 			log.Printf("[token] failed to update Leonardo credits for %s: %v", tokenID, err)
 		}
 	}
@@ -1011,7 +1011,7 @@ func (s *Server) HandleCheckInvalidTokensBatch(w http.ResponseWriter, r *http.Re
 		}
 		s.restoreTokenAfterSuccessfulRefresh(id)
 		if credits != nil {
-			s.TokenMgr.UpdateCredits(id, float64(credits.TotalTokens), float64(credits.SubscriptionTokens+credits.PaidTokens+credits.RolloverTokens))
+			s.TokenMgr.UpdateCreditsWithRenewalDate(id, float64(credits.TotalTokens), float64(credits.SubscriptionTokens+credits.PaidTokens+credits.RolloverTokens), credits.TokenRenewalDate)
 			item["credits"] = credits.TotalTokens
 		}
 		s.TokenMgr.UpdateExpiry(id, float64(session.JWTExpiry.Unix()))
@@ -1357,7 +1357,7 @@ func (s *Server) HandleTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		// Update token info in the pool
 		s.restoreTokenAfterSuccessfulRefresh(tokenID)
 		if credits != nil {
-			s.TokenMgr.UpdateCredits(tokenID, float64(credits.TotalTokens), float64(credits.SubscriptionTokens+credits.PaidTokens+credits.RolloverTokens))
+			s.TokenMgr.UpdateCreditsWithRenewalDate(tokenID, float64(credits.TotalTokens), float64(credits.SubscriptionTokens+credits.PaidTokens+credits.RolloverTokens), credits.TokenRenewalDate)
 		}
 		s.TokenMgr.UpdateExpiry(tokenID, float64(session.JWTExpiry.Unix()))
 		s.TokenMgr.UpdateAccountInfo(tokenID, session.HasuraUserID, session.Email)
@@ -1447,7 +1447,7 @@ func (s *Server) HandleTokenRefreshExpiryTest(w http.ResponseWriter, r *http.Req
 	_ = s.TokenMgr.UpdateExpiry(tokenID, float64(session.JWTExpiry.Unix()))
 	_ = s.TokenMgr.UpdateAccountInfo(tokenID, session.HasuraUserID, session.Email)
 	if credits != nil {
-		_ = s.TokenMgr.UpdateCredits(tokenID, float64(credits.TotalTokens), float64(credits.SubscriptionTokens+credits.PaidTokens+credits.RolloverTokens))
+		_ = s.TokenMgr.UpdateCreditsWithRenewalDate(tokenID, float64(credits.TotalTokens), float64(credits.SubscriptionTokens+credits.PaidTokens+credits.RolloverTokens), credits.TokenRenewalDate)
 	}
 
 	result := map[string]interface{}{
@@ -2213,7 +2213,7 @@ func (s *Server) runCookieImportJob(jobID string, inputs []cookieImportInput) {
 						}
 						if credits != nil {
 							totalCredits := float64(credits.SubscriptionTokens + credits.PaidTokens + credits.RolloverTokens)
-							_ = s.TokenMgr.UpdateCredits(tokenID, float64(credits.TotalTokens), totalCredits)
+							_ = s.TokenMgr.UpdateCreditsWithRenewalDate(tokenID, float64(credits.TotalTokens), totalCredits, credits.TokenRenewalDate)
 							detail = fmt.Sprintf("导入并刷新成功，剩余积分 %d", credits.TotalTokens)
 						} else {
 							detail = "导入并刷新成功"
@@ -2439,7 +2439,7 @@ func (s *Server) runTokenRefreshBatchJob(jobID string, ids []string) {
 				} else {
 					s.restoreTokenAfterSuccessfulRefresh(id)
 					if credits != nil {
-						_ = s.TokenMgr.UpdateCredits(id, float64(credits.TotalTokens), float64(credits.SubscriptionTokens+credits.PaidTokens+credits.RolloverTokens))
+						_ = s.TokenMgr.UpdateCreditsWithRenewalDate(id, float64(credits.TotalTokens), float64(credits.SubscriptionTokens+credits.PaidTokens+credits.RolloverTokens), credits.TokenRenewalDate)
 						detail = fmt.Sprintf("刷新成功，剩余积分 %d", credits.TotalTokens)
 					}
 					_ = s.TokenMgr.UpdateExpiry(id, float64(session.JWTExpiry.Unix()))
@@ -4126,7 +4126,7 @@ func (s *Server) refreshTokenCredits(tokenID string, session *leonardo.TokenSess
 	}
 	if credits != nil {
 		availableCredits := float64(credits.TotalTokens)
-		s.TokenMgr.UpdateCredits(tokenID, availableCredits, float64(credits.SubscriptionTokens+credits.PaidTokens+credits.RolloverTokens))
+		s.TokenMgr.UpdateCreditsWithRenewalDate(tokenID, availableCredits, float64(credits.SubscriptionTokens+credits.PaidTokens+credits.RolloverTokens), credits.TokenRenewalDate)
 		log.Printf("[poll] refreshed credits for token %s: %d remaining", tokenID, credits.TotalTokens)
 		s.markTokenExhaustedIfBelowGenerationMinimum(tokenID, availableCredits, "remaining credits below video generation minimum after credits refresh")
 	}

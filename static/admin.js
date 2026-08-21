@@ -221,7 +221,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       tokenSelectedIds.clear();
       renderTokenSummary([], null, null);
       renderTokenPagination(null);
-      tbody.innerHTML = `<tr><td colspan="9" class="empty-state" style="color: #ffb4bc;">加载失败</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="10" class="empty-state" style="color: #ffb4bc;">加载失败</td></tr>`;
     }
   }
 
@@ -381,6 +381,28 @@ document.addEventListener("DOMContentLoaded", async () => {
     return `<div style="margin-top:4px; font-size:11px; line-height:1.3; color:${color}; max-width:160px;" title="${escapeHtml(reason)}">${prefix} ${count}/2：${escapeHtml(reason)}</div>`;
   }
 
+  function formatTokenRenewalDate(token) {
+    const text = String(token?.token_renewal_date_text || "").trim();
+    const raw = String(token?.token_renewal_date || "").trim();
+    if (!text && !raw) {
+      return '<span style="color:#7f96ad;">未知</span>';
+    }
+    const at = Number(token?.token_renewal_at || 0);
+    const title = raw ? `官方时间: ${raw}` : "";
+    if (Number.isFinite(at) && at > 0) {
+      const remain = Math.floor(at - Date.now() / 1000);
+      if (remain <= 0) {
+        return `<span style="color:#4de2c4;" title="${escapeHtml(title)}">已到刷新时间<br><span style="color:#7f96ad;">${escapeHtml(text || raw)}</span></span>`;
+      }
+      const days = Math.floor(remain / 86400);
+      const hours = Math.floor((remain % 86400) / 3600);
+      const mins = Math.floor((remain % 3600) / 60);
+      const rel = days > 0 ? `${days}天${hours}小时` : `${hours}小时${mins}分`;
+      return `<span style="color:#a8bfd8;" title="${escapeHtml(title)}">${escapeHtml(text || raw)}<br><span style="color:#7f96ad;">剩余 ${rel}</span></span>`;
+    }
+    return `<span style="color:#a8bfd8;" title="${escapeHtml(title)}">${escapeHtml(text || raw)}</span>`;
+  }
+
   function formatCredits(token) {
     const available = Number(token?.credits_available);
     const err = String(token?.credits_error || "").trim();
@@ -431,7 +453,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       const emptyText = total > 0 && filtered === 0
         ? "当前筛选条件下没有 Token。"
         : "当前没有可用的 Token，请在上方添加。";
-      tbody.innerHTML = `<tr><td colspan="9" class="empty-state">${emptyText}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="10" class="empty-state">${emptyText}</td></tr>`;
       syncTokenSelectAllState();
       return;
     }
@@ -491,6 +513,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         <td style="font-size:12px; line-height:1.35;">${formatCredits(t)}</td>
         <td>${formatTokenSuccessCounts(t)}</td>
         <td style="font-size:12px; line-height:1.35;">${formatExpiry(t)}</td>
+        <td style="font-size:12px; line-height:1.35; min-width:130px;">${formatTokenRenewalDate(t)}</td>
         <td>${actionsGrid}</td>
       `;
       tbody.appendChild(tr);
