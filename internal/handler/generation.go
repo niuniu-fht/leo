@@ -467,7 +467,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 	}
 	width, height, sizeLabel := sizeInfo.Width, sizeInfo.Height, sizeInfo.Label
 
-	session, usedTokenID, releaseTokenPreparation := s.getLeonardoSessionForModelExcludingWithPreparationLease("", nil, publicModelID, false)
+	session, usedTokenID, releaseTokenPreparation := s.getLeonardoSessionForModelExcludingWithPreparationLease("", nil, publicModelID, sizeInfo.TierLabel, false)
 	if session == nil {
 		writeJSON(w, 503, errorResp("No tokens available", "server_error"))
 		return
@@ -995,7 +995,7 @@ func (s *Server) HandleVideoGeneration(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		session, usedTokenID, releaseTokenPreparation := s.getLeonardoSessionForModelExcludingWithPreparationLease("", triedTokenIDs, modelID, klingO3VideoRefMode)
+		session, usedTokenID, releaseTokenPreparation := s.getLeonardoSessionForModelExcludingWithPreparationLease("", triedTokenIDs, modelID, "", klingO3VideoRefMode)
 		if session == nil {
 			if lastFailure != nil {
 				break
@@ -3371,6 +3371,9 @@ func explicitStatusCodeFromGenerationError(err error) (int, bool) {
 		return 0, false
 	}
 	msg := strings.ToLower(err.Error())
+	if isGenerationSafetyReviewError(msg) {
+		return http.StatusBadRequest, true
+	}
 	switch {
 	case strings.Contains(msg, " 429"), strings.Contains(msg, "(429)"), strings.Contains(msg, "returned 429"), strings.Contains(msg, "rate limit"):
 		return http.StatusTooManyRequests, true
@@ -3389,6 +3392,44 @@ func explicitStatusCodeFromGenerationError(err error) (int, bool) {
 	}
 }
 
+func isGenerationSafetyReviewError(msg string) bool {
+	msg = strings.ToLower(strings.TrimSpace(msg))
+	if msg == "" {
+		return false
+	}
+	for _, item := range []string{
+		"provider_moderation_error",
+		"moderation",
+		"nsfw",
+		"safety",
+		"safe search",
+		"content policy",
+		"policy violation",
+		"blocked by policy",
+		"prompt blocked",
+		"prompt rejected",
+		"image rejected",
+		"image safety",
+		"init image moderation",
+		"moderation failed",
+		"moderation rejected",
+		"not safe",
+		"unsafe",
+		"adult",
+		"sexual",
+		"nudity",
+		"violence",
+		"extreme_violence",
+		"hate",
+		"self harm",
+		"self_harm",
+	} {
+		if strings.Contains(msg, item) {
+			return true
+		}
+	}
+	return false
+}
 func isRetryableGenerationError(err error) bool {
 	if err == nil {
 		return false

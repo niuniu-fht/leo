@@ -89,7 +89,7 @@ func TestTokenCanRunSora2UsesModeThreshold(t *testing.T) {
 
 	cfg.SetAll(map[string]interface{}{})
 	srv := &Server{Config: cfg, TokenMgr: mgr}
-	if !srv.tokenCanRunModelByCredits(mgr.GetByID(tokenID), "sora2", false) {
+	if !srv.tokenCanRunModelByCredits(mgr.GetByID(tokenID), "sora2", "", false) {
 		t.Fatalf("expected 2000-credit token to be accepted for sora2")
 	}
 	if status := toString(mgr.GetByID(tokenID)["status"]); status != "active" {
@@ -117,10 +117,10 @@ func TestTokenCanRunLowerCostSeedanceModelsByCredits(t *testing.T) {
 
 	cfg.Set("token_exhaustion_credit_threshold", videoKo3ExhaustionCredits)
 	srv := &Server{Config: cfg, TokenMgr: mgr}
-	if !srv.tokenCanRunModelByCredits(mgr.GetByID(tokenID), "video-2.0-mini-480p", false) {
+	if !srv.tokenCanRunModelByCredits(mgr.GetByID(tokenID), "video-2.0-mini-480p", "", false) {
 		t.Fatalf("expected 1300-credit token to run mini 480p")
 	}
-	if srv.tokenCanRunModelByCredits(mgr.GetByID(tokenID), "video-2.0-fast-480p", false) {
+	if srv.tokenCanRunModelByCredits(mgr.GetByID(tokenID), "video-2.0-fast-480p", "", false) {
 		t.Fatalf("expected 1300-credit token to be skipped for fast 480p")
 	}
 	if status := toString(mgr.GetByID(tokenID)["status"]); status != "active" {
@@ -130,7 +130,7 @@ func TestTokenCanRunLowerCostSeedanceModelsByCredits(t *testing.T) {
 	if err := mgr.UpdateCredits(tokenID, 1100, 7200); err != nil {
 		t.Fatalf("update credits below minimum: %v", err)
 	}
-	if srv.tokenCanRunModelByCredits(mgr.GetByID(tokenID), "video-2.0-mini-480p", false) {
+	if srv.tokenCanRunModelByCredits(mgr.GetByID(tokenID), "video-2.0-mini-480p", "", false) {
 		t.Fatalf("expected 1100-credit token to be rejected")
 	}
 	if status := toString(mgr.GetByID(tokenID)["status"]); status != "exhausted" {
@@ -212,7 +212,7 @@ func TestGenerationTokenCandidatesPreferLowestSufficientCredits(t *testing.T) {
 		{"id": "middle", "credits_available": 2400},
 	}
 
-	got := srv.generationTokenCandidates(candidates, nil, "video-2.0-mini-480p", false, "round_robin")
+	got := srv.generationTokenCandidates(candidates, nil, "video-2.0-mini-480p", "", false, "round_robin")
 	if len(got) != 3 {
 		t.Fatalf("candidate count = %d, want 3", len(got))
 	}
@@ -228,7 +228,7 @@ func TestGenerationTokenCandidatesFromStartPreservesImportOrder(t *testing.T) {
 		{"id": "new-tight-balance", "credits_available": 1356},
 	}
 
-	got := srv.generationTokenCandidates(candidates, nil, "video-2.0-mini-480p", false, "round_robin_from_start")
+	got := srv.generationTokenCandidates(candidates, nil, "video-2.0-mini-480p", "", false, "round_robin_from_start")
 	if len(got) != 2 {
 		t.Fatalf("candidate count = %d, want 2", len(got))
 	}
@@ -258,7 +258,7 @@ func TestGenerationTokenCandidatesFromStartPreservesManagerImportOrder(t *testin
 
 	srv := &Server{TokenMgr: mgr}
 	candidates := mgr.AvailableTokensForPlatform("leonardo", "round_robin_from_start")
-	got := srv.generationTokenCandidates(candidates, nil, "video-2.0-mini-480p", false, "round_robin_from_start")
+	got := srv.generationTokenCandidates(candidates, nil, "video-2.0-mini-480p", "", false, "round_robin_from_start")
 	if len(got) != 2 {
 		t.Fatalf("candidate count = %d, want 2", len(got))
 	}
@@ -274,7 +274,7 @@ func TestGenerationTokenCandidatesFromStartDoesNotUseTokenIDAsTieBreaker(t *test
 		{"id": "a-new-token", "credits_available": 9000},
 	}
 
-	got := srv.generationTokenCandidates(candidates, nil, "video-2.0", false, "round_robin_from_start")
+	got := srv.generationTokenCandidates(candidates, nil, "video-2.0", "", false, "round_robin_from_start")
 	if len(got) != 2 {
 		t.Fatalf("candidate count = %d, want 2", len(got))
 	}
@@ -293,11 +293,61 @@ func TestGenerationTokenCandidatesFromStartSkipsIneligibleTokenWithoutReordering
 		{"id": "newer-eligible", "credits_available": 1356},
 	}
 
-	got := srv.generationTokenCandidates(candidates, map[string]bool{"old-excluded": true}, "video-2.0-mini-480p", false, "round_robin_from_start")
+	got := srv.generationTokenCandidates(candidates, map[string]bool{"old-excluded": true}, "video-2.0-mini-480p", "", false, "round_robin_from_start")
 	if len(got) != 2 {
 		t.Fatalf("candidate count = %d, want 2", len(got))
 	}
 	if first := toString(got[0]["id"]); first != "next-eligible" {
 		t.Fatalf("first candidate = %q, want next-eligible", first)
+	}
+}
+
+func TestImageTokenCreditThresholds(t *testing.T) {
+	cfg := config.Global()
+	original := cfg.GetAll()
+	cfg.SetAll(map[string]interface{}{})
+	t.Cleanup(func() {
+		cfg.SetAll(original)
+	})
+
+	srv := &Server{Config: cfg}
+	low := map[string]interface{}{"id": "low", "credits_available": float64(8)}
+	mid := map[string]interface{}{"id": "mid", "credits_available": float64(31)}
+	high := map[string]interface{}{"id": "high", "credits_available": float64(251)}
+
+	if srv.tokenCanRunModelByCredits(low, "gpt-image-2", "1k", false) {
+		t.Fatalf("expected equal 1k threshold credits to be skipped")
+	}
+	if !srv.tokenCanRunModelByCredits(mid, "gpt-image-2", "2k", false) {
+		t.Fatalf("expected credits above gpt-image-2 2k threshold to pass")
+	}
+	if srv.tokenCanRunModelByCredits(mid, "gpt-image-2", "4k", false) {
+		t.Fatalf("expected credits below gpt-image-2 4k threshold to be skipped")
+	}
+	if !srv.tokenCanRunModelByCredits(high, "gpt-image-gemini-3-pro-image", "4k", false) {
+		t.Fatalf("expected credits above pro 4k threshold to pass")
+	}
+}
+
+func TestImageTokenCreditCandidatesPreferSmallestSurplus(t *testing.T) {
+	cfg := config.Global()
+	original := cfg.GetAll()
+	cfg.SetAll(map[string]interface{}{"token_max_running_tasks": 5})
+	t.Cleanup(func() {
+		cfg.SetAll(original)
+	})
+
+	srv := &Server{Config: cfg}
+	candidates := []map[string]interface{}{
+		{"id": "too-low", "credits_available": float64(120)},
+		{"id": "large", "credits_available": float64(300)},
+		{"id": "fit", "credits_available": float64(161)},
+	}
+	got := srv.generationTokenCandidates(candidates, nil, "banana2", "4k", false, "round_robin")
+	if len(got) != 2 {
+		t.Fatalf("expected 2 eligible candidates, got %d", len(got))
+	}
+	if toString(got[0]["id"]) != "fit" {
+		t.Fatalf("expected smallest eligible surplus first, got %s", toString(got[0]["id"]))
 	}
 }

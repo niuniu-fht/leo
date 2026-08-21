@@ -2730,7 +2730,7 @@ func (s *Server) HandleLeonardoGenerate(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Get session from token pool
-	session, usedTokenID, releaseTokenPreparation := s.getLeonardoSessionForModelExcludingWithPreparationLease(body.TokenID, nil, modelID, isKlingO3ModelID(modelID) && len(body.VideoReference) > 0)
+	session, usedTokenID, releaseTokenPreparation := s.getLeonardoSessionForModelExcludingWithPreparationLease(body.TokenID, nil, modelID, "", isKlingO3ModelID(modelID) && len(body.VideoReference) > 0)
 	if session == nil {
 		writeJSON(w, 404, map[string]string{"detail": "No tokens available"})
 		return
@@ -4435,8 +4435,8 @@ func generationJWTWindowPriority(info map[string]interface{}) int {
 	return 2
 }
 
-func (s *Server) generationTokenCandidates(candidates []map[string]interface{}, excluded map[string]bool, modelID string, videoReferenceMode bool, strategy string) []map[string]interface{} {
-	requiredCredits, hasRequiredCredits := requiredCreditsForVideoRequest(modelID, videoReferenceMode)
+func (s *Server) generationTokenCandidates(candidates []map[string]interface{}, excluded map[string]bool, modelID string, imageSizeTier string, videoReferenceMode bool, strategy string) []map[string]interface{} {
+	requiredCredits, hasRequiredCredits := s.requiredCreditsForGenerationRequest(modelID, imageSizeTier, videoReferenceMode)
 	isEligible := func(info map[string]interface{}) bool {
 		foundID := strings.TrimSpace(toString(info["id"]))
 		if foundID == "" || (excluded != nil && excluded[foundID]) {
@@ -4445,7 +4445,7 @@ func (s *Server) generationTokenCandidates(candidates []map[string]interface{}, 
 		if !s.tokenCanAcceptSubmission(foundID) {
 			return false
 		}
-		return s.tokenCanRunModelByCredits(info, modelID, videoReferenceMode)
+		return s.tokenCanRunModelByCredits(info, modelID, imageSizeTier, videoReferenceMode)
 	}
 
 	// The from-start strategy promises to scan tokens in import order for every
@@ -4500,7 +4500,7 @@ func (s *Server) generationTokenCandidates(candidates []map[string]interface{}, 
 	return out
 }
 
-func (s *Server) getLeonardoSessionForModelExcludingWithPreparationLease(tokenID string, excluded map[string]bool, modelID string, videoReferenceMode bool) (*leonardo.TokenSession, string, func()) {
+func (s *Server) getLeonardoSessionForModelExcludingWithPreparationLease(tokenID string, excluded map[string]bool, modelID string, imageSizeTier string, videoReferenceMode bool) (*leonardo.TokenSession, string, func()) {
 	release := func() {}
 	if tokenID != "" {
 		if excluded != nil && excluded[tokenID] {
@@ -4509,7 +4509,7 @@ func (s *Server) getLeonardoSessionForModelExcludingWithPreparationLease(tokenID
 		if !s.tokenCanAcceptSubmission(tokenID) || !s.reserveTokenPreparation(tokenID) {
 			return nil, "", release
 		}
-		session, usedTokenID := s.getLeonardoSessionForModel(tokenID, modelID, videoReferenceMode)
+		session, usedTokenID := s.getLeonardoSessionForModel(tokenID, modelID, imageSizeTier, videoReferenceMode)
 		if session == nil || usedTokenID == "" {
 			s.releaseTokenPreparation(tokenID)
 			return nil, "", release
@@ -4525,7 +4525,7 @@ func (s *Server) getLeonardoSessionForModelExcludingWithPreparationLease(tokenID
 		strategy = strings.TrimSpace(s.Config.GetString("token_rotation_strategy", "round_robin"))
 	}
 
-	candidates := s.generationTokenCandidates(s.TokenMgr.AvailableTokensForPlatform("leonardo", strategy), excluded, modelID, videoReferenceMode, strategy)
+	candidates := s.generationTokenCandidates(s.TokenMgr.AvailableTokensForPlatform("leonardo", strategy), excluded, modelID, imageSizeTier, videoReferenceMode, strategy)
 	for _, info := range candidates {
 		foundID := strings.TrimSpace(toString(info["id"]))
 		if foundID == "" {
@@ -4565,7 +4565,7 @@ func (s *Server) getLeonardoSessionForModelExcluding(tokenID string, excluded ma
 		if !s.tokenCanAcceptSubmission(tokenID) {
 			return nil, ""
 		}
-		return s.getLeonardoSessionForModel(tokenID, modelID, false)
+		return s.getLeonardoSessionForModel(tokenID, modelID, "", false)
 	}
 
 	s.tokenSelectionMu.Lock()
@@ -4576,7 +4576,7 @@ func (s *Server) getLeonardoSessionForModelExcluding(tokenID string, excluded ma
 		strategy = strings.TrimSpace(s.Config.GetString("token_rotation_strategy", "round_robin"))
 	}
 
-	candidates := s.generationTokenCandidates(s.TokenMgr.AvailableTokensForPlatform("leonardo", strategy), excluded, modelID, false, strategy)
+	candidates := s.generationTokenCandidates(s.TokenMgr.AvailableTokensForPlatform("leonardo", strategy), excluded, modelID, "", false, strategy)
 	for _, info := range candidates {
 		foundID := strings.TrimSpace(toString(info["id"]))
 		if foundID == "" {
@@ -4604,10 +4604,10 @@ func (s *Server) getLeonardoSessionForModelExcluding(tokenID string, excluded ma
 // getLeonardoSession finds a Leonardo session from the token pool.
 // Returns the session and the token ID used.
 func (s *Server) getLeonardoSession(tokenID string) (*leonardo.TokenSession, string) {
-	return s.getLeonardoSessionForModel(tokenID, "", false)
+	return s.getLeonardoSessionForModel(tokenID, "", "", false)
 }
 
-func (s *Server) getLeonardoSessionForModel(tokenID string, modelID string, videoReferenceMode bool) (*leonardo.TokenSession, string) {
+func (s *Server) getLeonardoSessionForModel(tokenID string, modelID string, imageSizeTier string, videoReferenceMode bool) (*leonardo.TokenSession, string) {
 	// If specific tokenID provided, use that
 	if tokenID != "" {
 		info := s.TokenMgr.GetByID(tokenID)
@@ -4623,7 +4623,7 @@ func (s *Server) getLeonardoSessionForModel(tokenID string, modelID string, vide
 		if generationJWTWindowPriority(info) > 1 {
 			return nil, ""
 		}
-		if !s.tokenCanRunModelByCredits(info, modelID, videoReferenceMode) {
+		if !s.tokenCanRunModelByCredits(info, modelID, imageSizeTier, videoReferenceMode) {
 			return nil, ""
 		}
 		rawToken, _ := info["value"].(string)
@@ -4649,7 +4649,7 @@ func (s *Server) getLeonardoSessionForModel(tokenID string, modelID string, vide
 		strategy = strings.TrimSpace(s.Config.GetString("token_rotation_strategy", "round_robin"))
 	}
 
-	candidates := s.generationTokenCandidates(s.TokenMgr.AvailableTokensForPlatform("leonardo", strategy), nil, modelID, videoReferenceMode, strategy)
+	candidates := s.generationTokenCandidates(s.TokenMgr.AvailableTokensForPlatform("leonardo", strategy), nil, modelID, imageSizeTier, videoReferenceMode, strategy)
 	for _, info := range candidates {
 		foundID := strings.TrimSpace(toString(info["id"]))
 		if foundID == "" {
@@ -4746,20 +4746,90 @@ func (s *Server) tokenExhaustionCreditThreshold() float64 {
 	return float64(defaultTokenExhaustionCreditThreshold)
 }
 
-func (s *Server) tokenCanRunModelByCredits(info map[string]interface{}, modelID string, videoReferenceMode bool) bool {
-	requiredCredits, ok := requiredCreditsForVideoRequest(modelID, videoReferenceMode)
+func (s *Server) requiredCreditsForGenerationRequest(modelID string, imageSizeTier string, videoReferenceMode bool) (float64, bool) {
+	if requiredCredits, ok := s.requiredCreditsForImageRequest(modelID, imageSizeTier); ok {
+		return requiredCredits, true
+	}
+	return requiredCreditsForVideoRequest(modelID, videoReferenceMode)
+}
+
+func (s *Server) requiredCreditsForImageRequest(modelID string, imageSizeTier string) (float64, bool) {
+	bucket := imageCreditThresholdBucket(modelID)
+	if bucket == "" {
+		return 0, false
+	}
+	tier := strings.ToLower(strings.TrimSpace(imageSizeTier))
+	if tier == "" {
+		tier = "1k"
+	}
+	defaults := map[string]map[string]float64{
+		"gpt_image_gemini_3_pro_image": {
+			"1k": 140,
+			"2k": 140,
+			"4k": 250,
+		},
+		"gpt_image_gemini_3_1_flash_image": {
+			"1k": 80,
+			"2k": 120,
+			"4k": 160,
+		},
+		"gpt_image_2": {
+			"1k": 8,
+			"2k": 30,
+			"4k": 60,
+		},
+	}
+	tierDefaults := defaults[bucket]
+	defaultValue, ok := tierDefaults[tier]
+	if !ok {
+		return 0, false
+	}
+	if s != nil && s.Config != nil {
+		key := fmt.Sprintf("image_token_min_credits_%s_%s", bucket, tier)
+		configured := s.Config.GetInt(key, int(defaultValue))
+		if configured < 0 {
+			configured = 0
+		}
+		return float64(configured), true
+	}
+	return defaultValue, true
+}
+
+func imageCreditThresholdBucket(modelID string) string {
+	model := strings.ToLower(strings.TrimSpace(modelID))
+	switch model {
+	case "gpt-image-gemini-3-pro-image", "bananapro", "banana-pro", "nano-banana-pro", "gemini-image-2":
+		return "gpt_image_gemini_3_pro_image"
+	case "gpt-image-gemini-3.1-flash-image", "banana2", "nano-banana-2":
+		return "gpt_image_gemini_3_1_flash_image"
+	}
+	if strings.HasPrefix(model, "gpt-image-2") {
+		return "gpt_image_2"
+	}
+	return ""
+}
+
+func (s *Server) tokenCanRunModelByCredits(info map[string]interface{}, modelID string, imageSizeTier string, videoReferenceMode bool) bool {
+	requiredCredits, ok := s.requiredCreditsForGenerationRequest(modelID, imageSizeTier, videoReferenceMode)
 	if !ok {
 		return true
 	}
 	availableCredits, known := tokenCreditsAvailable(info)
 	if !known {
-		log.Printf("[token] skipping token %s for %s: credits unavailable", strings.TrimSpace(toString(info["id"])), modelID)
+		log.Printf("[token] skipping token %s for %s %s: credits unavailable", strings.TrimSpace(toString(info["id"])), modelID, strings.TrimSpace(imageSizeTier))
 		return false
 	}
 	tokenID := strings.TrimSpace(toString(info["id"]))
 	if availableCredits < s.tokenExhaustionCreditThreshold() {
-		s.markTokenExhaustedIfBelowGenerationMinimum(tokenID, availableCredits, "remaining credits below video generation minimum")
+		s.markTokenExhaustedIfBelowGenerationMinimum(tokenID, availableCredits, "remaining credits below generation minimum")
 		return false
+	}
+	if imageCreditThresholdBucket(modelID) != "" && strings.TrimSpace(imageSizeTier) != "" {
+		if availableCredits <= requiredCredits {
+			log.Printf("[token] skipping token %s for %s %s: credits %.0f <= required %.0f", tokenID, modelID, imageSizeTier, availableCredits, requiredCredits)
+			return false
+		}
+		return true
 	}
 	if availableCredits < requiredCredits {
 		log.Printf("[token] skipping token %s for %s: credits %.0f < required %.0f", tokenID, modelID, availableCredits, requiredCredits)

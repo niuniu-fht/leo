@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"net/http"
 	"testing"
 
 	"leo2api/internal/config"
@@ -852,5 +853,19 @@ func TestTokenCreditsAvailable(t *testing.T) {
 	}
 	if _, ok := tokenCreditsAvailable(map[string]interface{}{}); ok {
 		t.Fatal("empty token info should not have known credits")
+	}
+}
+
+func TestStatusCodeFromGenerationSafetyReviewError(t *testing.T) {
+	cases := []string{
+		"image generate error: PROVIDER_MODERATION_ERROR: NSFW",
+		"invalid image_urls[0]: wait for init image failed: init image moderation rejected",
+		"prompt blocked by content policy",
+		"image safety review failed: nudity",
+	}
+	for _, msg := range cases {
+		if got := statusCodeFromGenerationError(errors.New(msg)); got != http.StatusBadRequest {
+			t.Fatalf("statusCodeFromGenerationError(%q) = %d, want 400", msg, got)
+		}
 	}
 }

@@ -1180,6 +1180,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   const confImageSizeModeGptImage2Higher = document.getElementById("confImageSizeModeGptImage2Higher");
   const confImageSizeModeBanana2 = document.getElementById("confImageSizeModeBanana2");
   const confImageSizeModeBananaPro = document.getElementById("confImageSizeModeBananaPro");
+  const confImageTokenMinCreditsGeminiPro1k = document.getElementById("confImageTokenMinCreditsGeminiPro1k");
+  const confImageTokenMinCreditsGeminiPro2k = document.getElementById("confImageTokenMinCreditsGeminiPro2k");
+  const confImageTokenMinCreditsGeminiPro4k = document.getElementById("confImageTokenMinCreditsGeminiPro4k");
+  const confImageTokenMinCreditsGeminiFlash1k = document.getElementById("confImageTokenMinCreditsGeminiFlash1k");
+  const confImageTokenMinCreditsGeminiFlash2k = document.getElementById("confImageTokenMinCreditsGeminiFlash2k");
+  const confImageTokenMinCreditsGeminiFlash4k = document.getElementById("confImageTokenMinCreditsGeminiFlash4k");
+  const confImageTokenMinCreditsGptImage2_1k = document.getElementById("confImageTokenMinCreditsGptImage2_1k");
+  const confImageTokenMinCreditsGptImage2_2k = document.getElementById("confImageTokenMinCreditsGptImage2_2k");
+  const confImageTokenMinCreditsGptImage2_4k = document.getElementById("confImageTokenMinCreditsGptImage2_4k");
   const confAdobe2APIBaseUrl = document.getElementById("confAdobe2APIBaseUrl");
   const confAdobe2APIApiKey = document.getElementById("confAdobe2APIApiKey");
   const confAdobe2APITimeoutSeconds = document.getElementById("confAdobe2APITimeoutSeconds");
@@ -1369,6 +1378,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
+  function setNumberInputValue(input, data, key, fallback) {
+    if (!input) return;
+    const raw = data && Object.prototype.hasOwnProperty.call(data, key) ? data[key] : fallback;
+    input.value = Number(raw ?? fallback);
+  }
+
+  function readCreditThresholdInput(input, fallback, label) {
+    const raw = String(input?.value ?? "").trim();
+    const value = raw === "" ? fallback : Number(raw);
+    if (!Number.isInteger(value) || value < 0 || value > 1000000) {
+      throw new Error(`${label} 必须是 0-1000000 的整数`);
+    }
+    return value;
+  }
   function normalizeImageSizeModeValue(value, fallback = "request") {
     const raw = String(value || fallback || "request").trim().toLowerCase();
     return ["1k", "2k", "4k"].includes(raw) ? raw : "request";
@@ -1521,6 +1544,15 @@ document.addEventListener("DOMContentLoaded", async () => {
         image_size_mode_gpt_image_2_higher: normalizeImageSizeModeValue(confImageSizeModeGptImage2Higher?.value || "request"),
         image_size_mode_banana2: normalizeImageSizeModeValue(confImageSizeModeBanana2?.value || "request"),
         image_size_mode_bananapro: normalizeImageSizeModeValue(confImageSizeModeBananaPro?.value || "request"),
+        image_token_min_credits_gpt_image_gemini_3_pro_image_1k: readCreditThresholdInput(confImageTokenMinCreditsGeminiPro1k, 140, "Gemini Pro 1k 积分阈值"),
+        image_token_min_credits_gpt_image_gemini_3_pro_image_2k: readCreditThresholdInput(confImageTokenMinCreditsGeminiPro2k, 140, "Gemini Pro 2k 积分阈值"),
+        image_token_min_credits_gpt_image_gemini_3_pro_image_4k: readCreditThresholdInput(confImageTokenMinCreditsGeminiPro4k, 250, "Gemini Pro 4k 积分阈值"),
+        image_token_min_credits_gpt_image_gemini_3_1_flash_image_1k: readCreditThresholdInput(confImageTokenMinCreditsGeminiFlash1k, 80, "Gemini Flash 1k 积分阈值"),
+        image_token_min_credits_gpt_image_gemini_3_1_flash_image_2k: readCreditThresholdInput(confImageTokenMinCreditsGeminiFlash2k, 120, "Gemini Flash 2k 积分阈值"),
+        image_token_min_credits_gpt_image_gemini_3_1_flash_image_4k: readCreditThresholdInput(confImageTokenMinCreditsGeminiFlash4k, 160, "Gemini Flash 4k 积分阈值"),
+        image_token_min_credits_gpt_image_2_1k: readCreditThresholdInput(confImageTokenMinCreditsGptImage2_1k, 8, "GPT Image 2 1k 积分阈值"),
+        image_token_min_credits_gpt_image_2_2k: readCreditThresholdInput(confImageTokenMinCreditsGptImage2_2k, 30, "GPT Image 2 2k 积分阈值"),
+        image_token_min_credits_gpt_image_2_4k: readCreditThresholdInput(confImageTokenMinCreditsGptImage2_4k, 60, "GPT Image 2 4k 积分阈值"),
         adobe2api_base_url: String(confAdobe2APIBaseUrl?.value || "").trim(),
         adobe2api_api_key: String(confAdobe2APIApiKey?.value || "").trim(),
         adobe2api_timeout_seconds: Math.max(1, Math.min(1800, Number(confAdobe2APITimeoutSeconds?.value || 300))),
