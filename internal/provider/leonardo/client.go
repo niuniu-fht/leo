@@ -35,7 +35,7 @@ const (
 )
 
 const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-	"(KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36"
+	"(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 const (
 	defaultClientTimeout   = 120 * time.Second
@@ -836,28 +836,31 @@ func sessionHeaderProfiles() []map[string]string {
 	}
 	return []map[string]string{
 		clone(map[string]string{
-			"Accept":                 "*/*",
-			"User-Agent":             defaultUserAgent,
-			"Sec-Ch-Ua":              `"Not_A Brand";v="99", "Google Chrome";v="109", "Chromium";v="109"`,
-			"Sec-Ch-Ua-Full-Version": `"109.0.0.0"`,
-			"Priority":               "u=1, i",
+			"Accept":                      "*/*",
+			"User-Agent":                  defaultUserAgent,
+			"Sec-Ch-Ua":                   `"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"`,
+			"Sec-Ch-Ua-Full-Version":      `"120.0.0.0"`,
+			"Sec-Ch-Ua-Full-Version-List": `"Not_A Brand";v="8.0.0.0", "Chromium";v="120.0.0.0", "Google Chrome";v="120.0.0.0"`,
+			"Priority":                    "u=1, i",
 		}),
 		clone(map[string]string{
-			"Accept":                 "application/json, text/plain, */*",
-			"User-Agent":             defaultUserAgent,
-			"Sec-Ch-Ua":              `"Not_A Brand";v="99", "Google Chrome";v="109", "Chromium";v="109"`,
-			"Sec-Ch-Ua-Full-Version": `"109.0.0.0"`,
-			"Cache-Control":          "no-cache",
-			"Pragma":                 "no-cache",
-			"Priority":               "u=1, i",
+			"Accept":                      "application/json, text/plain, */*",
+			"User-Agent":                  defaultUserAgent,
+			"Sec-Ch-Ua":                   `"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"`,
+			"Sec-Ch-Ua-Full-Version":      `"120.0.0.0"`,
+			"Sec-Ch-Ua-Full-Version-List": `"Not_A Brand";v="8.0.0.0", "Chromium";v="120.0.0.0", "Google Chrome";v="120.0.0.0"`,
+			"Cache-Control":               "no-cache",
+			"Pragma":                      "no-cache",
+			"Priority":                    "u=1, i",
 		}),
 		clone(map[string]string{
-			"Accept":                 "*/*",
-			"User-Agent":             defaultUserAgent,
-			"Sec-Ch-Ua":              `"Not_A Brand";v="99", "Chromium";v="109", "Google Chrome";v="109"`,
-			"Sec-Ch-Ua-Full-Version": `"109.0.0.0"`,
-			"Cache-Control":          "max-age=0",
-			"Priority":               "u=1, i",
+			"Accept":                      "*/*",
+			"User-Agent":                  defaultUserAgent,
+			"Sec-Ch-Ua":                   `"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"`,
+			"Sec-Ch-Ua-Full-Version":      `"120.0.0.0"`,
+			"Sec-Ch-Ua-Full-Version-List": `"Not_A Brand";v="8.0.0.0", "Chromium";v="120.0.0.0", "Google Chrome";v="120.0.0.0"`,
+			"Cache-Control":               "max-age=0",
+			"Priority":                    "u=1, i",
 		}),
 	}
 }
