@@ -4475,7 +4475,11 @@ func (s *Server) generationTokenCandidates(candidates []map[string]interface{}, 
 			priorityMatches = append(priorityMatches, info)
 		}
 		if len(priorityMatches) > 0 {
-			if hasRequiredCredits {
+			// Image credit thresholds only filter ineligible tokens. Keep the
+			// manager-provided order so round_robin/random scheduling remains
+			// effective instead of always selecting the smallest credit surplus.
+			isImageCreditThreshold := imageCreditThresholdBucket(modelID) != "" && strings.TrimSpace(imageSizeTier) != ""
+			if hasRequiredCredits && !isImageCreditThreshold {
 				sort.SliceStable(priorityMatches, func(i, j int) bool {
 					leftCredits, leftKnown := tokenCreditsAvailable(priorityMatches[i])
 					rightCredits, rightKnown := tokenCreditsAvailable(priorityMatches[j])

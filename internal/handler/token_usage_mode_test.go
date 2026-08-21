@@ -329,7 +329,7 @@ func TestImageTokenCreditThresholds(t *testing.T) {
 	}
 }
 
-func TestImageTokenCreditCandidatesPreferSmallestSurplus(t *testing.T) {
+func TestImageTokenCreditCandidatesFilterButPreserveRotationOrder(t *testing.T) {
 	cfg := config.Global()
 	original := cfg.GetAll()
 	cfg.SetAll(map[string]interface{}{"token_max_running_tasks": 5})
@@ -347,7 +347,7 @@ func TestImageTokenCreditCandidatesPreferSmallestSurplus(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected 2 eligible candidates, got %d", len(got))
 	}
-	if toString(got[0]["id"]) != "fit" {
-		t.Fatalf("expected smallest eligible surplus first, got %s", toString(got[0]["id"]))
+	if toString(got[0]["id"]) != "large" || toString(got[1]["id"]) != "fit" {
+		t.Fatalf("expected eligible candidates to preserve rotation order, got %s then %s", toString(got[0]["id"]), toString(got[1]["id"]))
 	}
 }
