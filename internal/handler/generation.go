@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -537,7 +538,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 		}
 		msg := fmt.Sprintf("image generation failed: %v", err)
 		s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, sizeInfo.TierLabel, sizeInfo.RatioLabel, sizeInfo.Transform, imageInputMode, imageOperation, imageReferenceCount, usedTokenID, session, time.Since(startTime).Seconds(), statusCode, msg)
-		writeJSON(w, statusCode, errorResp(msg, "server_error"))
+		writeJSON(w, statusCode, errorResp(msg, generationErrorTypeForStatus(statusCode)))
 		return
 	}
 	s.applyTokenCreditCost(usedTokenID, result.APICreditCost)
@@ -586,12 +587,14 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			}
 			s.scheduleFailedGenerationCreditsReconciliation(usedTokenID, session, result.GenerationID)
 		}
+		statusCode := statusCodeFromGenerationError(errors.New(failureMessage))
+		errorType := generationErrorTypeForStatus(statusCode)
 		if s.ReqLog != nil {
-			s.ReqLog.UpdateByGenerationID(result.GenerationID, "FAILED", 502, "", "", failureMessage)
+			s.ReqLog.UpdateByGenerationID(result.GenerationID, "FAILED", statusCode, "", "", failureMessage)
 			s.ReqLog.UpdateDuration(result.GenerationID, elapsedSec)
 		}
 		s.refreshTokenCredits(usedTokenID, session)
-		writeJSON(w, 502, errorResp(failureMessage, "server_error"))
+		writeJSON(w, statusCode, errorResp(failureMessage, errorType))
 		return
 	}
 
@@ -3364,6 +3367,13 @@ func statusCodeFromGenerationError(err error) int {
 		return statusCode
 	}
 	return http.StatusBadGateway
+}
+
+func generationErrorTypeForStatus(statusCode int) string {
+	if statusCode >= 400 && statusCode < 500 {
+		return "invalid_request_error"
+	}
+	return "server_error"
 }
 
 func explicitStatusCodeFromGenerationError(err error) (int, bool) {
