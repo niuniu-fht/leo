@@ -538,7 +538,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 		}
 		msg := fmt.Sprintf("image generation failed: %v", err)
 		s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, sizeInfo.TierLabel, sizeInfo.RatioLabel, sizeInfo.Transform, imageInputMode, imageOperation, imageReferenceCount, usedTokenID, session, time.Since(startTime).Seconds(), statusCode, msg)
-		writeJSON(w, statusCode, errorResp(msg, generationErrorTypeForStatus(statusCode)))
+		writeJSON(w, statusCode, errorResp(publicGenerationErrorMessage(msg, statusCode), generationErrorTypeForStatus(statusCode)))
 		return
 	}
 	s.applyTokenCreditCost(usedTokenID, result.APICreditCost)
@@ -594,7 +594,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			s.ReqLog.UpdateDuration(result.GenerationID, elapsedSec)
 		}
 		s.refreshTokenCredits(usedTokenID, session)
-		writeJSON(w, statusCode, errorResp(failureMessage, errorType))
+		writeJSON(w, statusCode, errorResp(publicGenerationErrorMessage(failureMessage, statusCode), errorType))
 		return
 	}
 
@@ -3367,6 +3367,15 @@ func statusCodeFromGenerationError(err error) int {
 		return statusCode
 	}
 	return http.StatusBadGateway
+}
+
+const generationSafetyReviewPublicMessage = "内容审核未通过，请修改提示词后重试"
+
+func publicGenerationErrorMessage(message string, statusCode int) string {
+	if statusCode == http.StatusBadRequest && isGenerationSafetyReviewError(message) {
+		return generationSafetyReviewPublicMessage
+	}
+	return message
 }
 
 func generationErrorTypeForStatus(statusCode int) string {

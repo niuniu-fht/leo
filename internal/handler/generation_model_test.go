@@ -880,3 +880,20 @@ func TestGenerationErrorTypeForSafetyReviewStatus(t *testing.T) {
 		t.Fatalf("error type = %q, want invalid_request_error", got)
 	}
 }
+
+func TestPublicGenerationErrorMessageForSafetyReview(t *testing.T) {
+	cases := []string{
+		"PROVIDER_MODERATION_ERROR: NSFW",
+		"PROVIDER_MODERATION_ERROR: CHILD",
+		"image generation failed: image generate error: PROVIDER_MODERATION_ERROR: CHILD",
+	}
+	for _, msg := range cases {
+		if got := publicGenerationErrorMessage(msg, http.StatusBadRequest); got != generationSafetyReviewPublicMessage {
+			t.Fatalf("publicGenerationErrorMessage(%q) = %q, want %q", msg, got, generationSafetyReviewPublicMessage)
+		}
+	}
+	plain := "image generation failed: upstream timeout"
+	if got := publicGenerationErrorMessage(plain, http.StatusBadGateway); got != plain {
+		t.Fatalf("non-safety message = %q, want original", got)
+	}
+}
