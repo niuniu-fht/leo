@@ -357,7 +357,7 @@ func TestOpenAIImageReferenceURLs(t *testing.T) {
 		},
 	}
 	got := req.referenceURLs()
-	want := []string{"https://example.com/a.png", "https://example.com/b.png", "https://example.com/c.png", "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA"}
+	want := []string{"https://example.com/a.png", "https://example.com/b.png", "https://example.com/c.png", "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA", "https://example.com/d.png", "https://example.com/e.png"}
 	if len(got) != len(want) {
 		t.Fatalf("referenceURLs len = %d, want %d: %#v", len(got), len(want), got)
 	}

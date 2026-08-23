@@ -1388,8 +1388,8 @@ func (r openAIImageGenerationRequest) referenceURLs() []string {
 		appendURL(img.Base64)
 		appendURL(img.B64JSON)
 	}
-	if len(out) > 4 {
-		return out[:4]
+	if len(out) > 6 {
+		return out[:6]
 	}
 	return out
 }
