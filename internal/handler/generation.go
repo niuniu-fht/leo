@@ -1824,8 +1824,8 @@ type gptImagePreset struct {
 
 var gptImageBanana1KPresets = []gptImagePreset{
 	{Ratio: 1, Width: 1024, Height: 1024},
-	{Ratio: 21.0 / 9.0, Width: 1582, Height: 672},
-	{Ratio: 9.0 / 21.0, Width: 672, Height: 1582},
+	{Ratio: 21.0 / 9.0, Width: 1584, Height: 672},
+	{Ratio: 9.0 / 21.0, Width: 672, Height: 1584},
 	{Ratio: 16.0 / 9.0, Width: 1376, Height: 768},
 	{Ratio: 9.0 / 16.0, Width: 768, Height: 1376},
 	{Ratio: 3.0 / 2.0, Width: 1264, Height: 848},
