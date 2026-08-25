@@ -78,5 +78,20 @@
   "token_success_auto_disable_enabled": false,
   "token_success_auto_disable_threshold": 2,
   "use_proxy": false,
-  "use_upstream_result_url": false
+  "use_upstream_result_url": false,
+  "image_token_min_credits_gpt_image_2_1k": 8,
+  "image_token_min_credits_gpt_image_2_2k": 30,
+  "image_token_min_credits_gpt_image_2_4k": 60,
+  "image_token_min_credits_gpt_image_2_high_1k": 68,
+  "image_token_min_credits_gpt_image_2_high_2k": 68,
+  "image_token_min_credits_gpt_image_2_high_4k": 68,
+  "image_token_min_credits_gpt_image_2_higher_1k": 250,
+  "image_token_min_credits_gpt_image_2_higher_2k": 250,
+  "image_token_min_credits_gpt_image_2_higher_4k": 250,
+  "image_token_min_credits_gpt_image_gemini_3_1_flash_image_1k": 80,
+  "image_token_min_credits_gpt_image_gemini_3_1_flash_image_2k": 120,
+  "image_token_min_credits_gpt_image_gemini_3_1_flash_image_4k": 160,
+  "image_token_min_credits_gpt_image_gemini_3_pro_image_1k": 140,
+  "image_token_min_credits_gpt_image_gemini_3_pro_image_2k": 140,
+  "image_token_min_credits_gpt_image_gemini_3_pro_image_4k": 250
 }

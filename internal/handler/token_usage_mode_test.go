@@ -327,6 +327,23 @@ func TestImageTokenCreditThresholds(t *testing.T) {
 	if !srv.tokenCanRunModelByCredits(high, "gpt-image-gemini-3-pro-image", "4k", false) {
 		t.Fatalf("expected credits above pro 4k threshold to pass")
 	}
+
+	gptHighLow := map[string]interface{}{"id": "gpt-high-low", "credits_available": float64(68)}
+	gptHighOk := map[string]interface{}{"id": "gpt-high-ok", "credits_available": float64(69)}
+	gptHigherLow := map[string]interface{}{"id": "gpt-higher-low", "credits_available": float64(250)}
+	gptHigherOk := map[string]interface{}{"id": "gpt-higher-ok", "credits_available": float64(251)}
+	if srv.tokenCanRunModelByCredits(gptHighLow, "gpt-image-2-high", "1k", false) {
+		t.Fatalf("expected equal gpt-image-2-high 1k threshold credits to be skipped")
+	}
+	if !srv.tokenCanRunModelByCredits(gptHighOk, "gpt-image-2-high", "1k", false) {
+		t.Fatalf("expected credits above gpt-image-2-high 1k threshold to pass")
+	}
+	if srv.tokenCanRunModelByCredits(gptHigherLow, "gpt-image-2-higher", "1k", false) {
+		t.Fatalf("expected equal gpt-image-2-higher 1k threshold credits to be skipped")
+	}
+	if !srv.tokenCanRunModelByCredits(gptHigherOk, "gpt-image-2-higher", "1k", false) {
+		t.Fatalf("expected credits above gpt-image-2-higher 1k threshold to pass")
+	}
 }
 
 func TestImageTokenCreditCandidatesFilterButPreserveRotationOrder(t *testing.T) {

@@ -4782,6 +4782,16 @@ func (s *Server) requiredCreditsForImageRequest(modelID string, imageSizeTier st
 			"2k": 30,
 			"4k": 60,
 		},
+		"gpt_image_2_high": {
+			"1k": 68,
+			"2k": 68,
+			"4k": 68,
+		},
+		"gpt_image_2_higher": {
+			"1k": 250,
+			"2k": 250,
+			"4k": 250,
+		},
 	}
 	tierDefaults := defaults[bucket]
 	defaultValue, ok := tierDefaults[tier]
@@ -4806,6 +4816,12 @@ func imageCreditThresholdBucket(modelID string) string {
 		return "gpt_image_gemini_3_pro_image"
 	case "gpt-image-gemini-3.1-flash-image", "banana2", "nano-banana-2":
 		return "gpt_image_gemini_3_1_flash_image"
+	}
+	switch model {
+	case "gpt-image-2-high":
+		return "gpt_image_2_high"
+	case "gpt-image-2-higher":
+		return "gpt_image_2_higher"
 	}
 	if strings.HasPrefix(model, "gpt-image-2") {
 		return "gpt_image_2"

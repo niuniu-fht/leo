@@ -1189,6 +1189,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   const confImageTokenMinCreditsGptImage2_1k = document.getElementById("confImageTokenMinCreditsGptImage2_1k");
   const confImageTokenMinCreditsGptImage2_2k = document.getElementById("confImageTokenMinCreditsGptImage2_2k");
   const confImageTokenMinCreditsGptImage2_4k = document.getElementById("confImageTokenMinCreditsGptImage2_4k");
+  const confImageTokenMinCreditsGptImage2High_1k = document.getElementById("confImageTokenMinCreditsGptImage2High_1k");
+  const confImageTokenMinCreditsGptImage2High_2k = document.getElementById("confImageTokenMinCreditsGptImage2High_2k");
+  const confImageTokenMinCreditsGptImage2High_4k = document.getElementById("confImageTokenMinCreditsGptImage2High_4k");
+  const confImageTokenMinCreditsGptImage2Higher_1k = document.getElementById("confImageTokenMinCreditsGptImage2Higher_1k");
+  const confImageTokenMinCreditsGptImage2Higher_2k = document.getElementById("confImageTokenMinCreditsGptImage2Higher_2k");
+  const confImageTokenMinCreditsGptImage2Higher_4k = document.getElementById("confImageTokenMinCreditsGptImage2Higher_4k");
   const confAdobe2APIBaseUrl = document.getElementById("confAdobe2APIBaseUrl");
   const confAdobe2APIApiKey = document.getElementById("confAdobe2APIApiKey");
   const confAdobe2APITimeoutSeconds = document.getElementById("confAdobe2APITimeoutSeconds");
@@ -1384,6 +1390,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     input.value = Number(raw ?? fallback);
   }
 
+  function setCreditThresholdInput(input, value, fallback) {
+    if (!input) return;
+    const n = Number(value ?? fallback);
+    input.value = Number.isFinite(n) ? n : fallback;
+  }
+
   function readCreditThresholdInput(input, fallback, label) {
     const raw = String(input?.value ?? "").trim();
     const value = raw === "" ? fallback : Number(raw);
@@ -1447,6 +1459,21 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (confImageSizeModeBananaPro) {
           confImageSizeModeBananaPro.value = normalizeImageSizeModeValue(data.image_size_mode_bananapro || "request");
         }
+        setCreditThresholdInput(confImageTokenMinCreditsGeminiPro1k, data.image_token_min_credits_gpt_image_gemini_3_pro_image_1k, 140);
+        setCreditThresholdInput(confImageTokenMinCreditsGeminiPro2k, data.image_token_min_credits_gpt_image_gemini_3_pro_image_2k, 140);
+        setCreditThresholdInput(confImageTokenMinCreditsGeminiPro4k, data.image_token_min_credits_gpt_image_gemini_3_pro_image_4k, 250);
+        setCreditThresholdInput(confImageTokenMinCreditsGeminiFlash1k, data.image_token_min_credits_gpt_image_gemini_3_1_flash_image_1k, 80);
+        setCreditThresholdInput(confImageTokenMinCreditsGeminiFlash2k, data.image_token_min_credits_gpt_image_gemini_3_1_flash_image_2k, 120);
+        setCreditThresholdInput(confImageTokenMinCreditsGeminiFlash4k, data.image_token_min_credits_gpt_image_gemini_3_1_flash_image_4k, 160);
+        setCreditThresholdInput(confImageTokenMinCreditsGptImage2_1k, data.image_token_min_credits_gpt_image_2_1k, 8);
+        setCreditThresholdInput(confImageTokenMinCreditsGptImage2_2k, data.image_token_min_credits_gpt_image_2_2k, 30);
+        setCreditThresholdInput(confImageTokenMinCreditsGptImage2_4k, data.image_token_min_credits_gpt_image_2_4k, 60);
+        setCreditThresholdInput(confImageTokenMinCreditsGptImage2High_1k, data.image_token_min_credits_gpt_image_2_high_1k, 68);
+        setCreditThresholdInput(confImageTokenMinCreditsGptImage2High_2k, data.image_token_min_credits_gpt_image_2_high_2k, 68);
+        setCreditThresholdInput(confImageTokenMinCreditsGptImage2High_4k, data.image_token_min_credits_gpt_image_2_high_4k, 68);
+        setCreditThresholdInput(confImageTokenMinCreditsGptImage2Higher_1k, data.image_token_min_credits_gpt_image_2_higher_1k, 250);
+        setCreditThresholdInput(confImageTokenMinCreditsGptImage2Higher_2k, data.image_token_min_credits_gpt_image_2_higher_2k, 250);
+        setCreditThresholdInput(confImageTokenMinCreditsGptImage2Higher_4k, data.image_token_min_credits_gpt_image_2_higher_4k, 250);
         if (confAdobe2APIBaseUrl) {
           confAdobe2APIBaseUrl.value = data.adobe2api_base_url || "";
         }
@@ -1553,6 +1580,12 @@ document.addEventListener("DOMContentLoaded", async () => {
         image_token_min_credits_gpt_image_2_1k: readCreditThresholdInput(confImageTokenMinCreditsGptImage2_1k, 8, "GPT Image 2 1k 积分阈值"),
         image_token_min_credits_gpt_image_2_2k: readCreditThresholdInput(confImageTokenMinCreditsGptImage2_2k, 30, "GPT Image 2 2k 积分阈值"),
         image_token_min_credits_gpt_image_2_4k: readCreditThresholdInput(confImageTokenMinCreditsGptImage2_4k, 60, "GPT Image 2 4k 积分阈值"),
+        image_token_min_credits_gpt_image_2_high_1k: readCreditThresholdInput(confImageTokenMinCreditsGptImage2High_1k, 68, "GPT Image 2 High 1k 积分阈值"),
+        image_token_min_credits_gpt_image_2_high_2k: readCreditThresholdInput(confImageTokenMinCreditsGptImage2High_2k, 68, "GPT Image 2 High 2k 积分阈值"),
+        image_token_min_credits_gpt_image_2_high_4k: readCreditThresholdInput(confImageTokenMinCreditsGptImage2High_4k, 68, "GPT Image 2 High 4k 积分阈值"),
+        image_token_min_credits_gpt_image_2_higher_1k: readCreditThresholdInput(confImageTokenMinCreditsGptImage2Higher_1k, 250, "GPT Image 2 Higher 1k 积分阈值"),
+        image_token_min_credits_gpt_image_2_higher_2k: readCreditThresholdInput(confImageTokenMinCreditsGptImage2Higher_2k, 250, "GPT Image 2 Higher 2k 积分阈值"),
+        image_token_min_credits_gpt_image_2_higher_4k: readCreditThresholdInput(confImageTokenMinCreditsGptImage2Higher_4k, 250, "GPT Image 2 Higher 4k 积分阈值"),
         adobe2api_base_url: String(confAdobe2APIBaseUrl?.value || "").trim(),
         adobe2api_api_key: String(confAdobe2APIApiKey?.value || "").trim(),
         adobe2api_timeout_seconds: Math.max(1, Math.min(1800, Number(confAdobe2APITimeoutSeconds?.value || 300))),
