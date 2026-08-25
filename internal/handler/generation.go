@@ -1664,7 +1664,7 @@ func gcdInt(a int, b int) int {
 
 func inferOpenAIImageSizeScaleForModel(publicModelID string, size string, aspectRatio string) int {
 	if width, height, ok := parseOpenAIImageSizePair(size); ok {
-		if isGPTImagePublicModel(publicModelID) {
+		if isGPTImagePublicModel(publicModelID) || isBananaImagePublicModel(publicModelID) {
 			return gptImage2ScaleByRequestArea(width, height)
 		}
 		return nearestImageScaleForModelAndSize(publicModelID, width, height)
@@ -1843,8 +1843,8 @@ var gptImage2OfficialPresetsByScale = map[int][]gptImagePreset{
 		{Ratio: 9.0 / 21.0, Width: 672, Height: 1584},
 		{Ratio: 16.0 / 9.0, Width: 1376, Height: 768},
 		{Ratio: 9.0 / 16.0, Width: 768, Height: 1376},
-		{Ratio: 3.0 / 2.0, Width: 1264, Height: 848},
-		{Ratio: 2.0 / 3.0, Width: 848, Height: 1264},
+		{Ratio: 3.0 / 2.0, Width: 1536, Height: 1024},
+		{Ratio: 2.0 / 3.0, Width: 1024, Height: 1536},
 		{Ratio: 4.0 / 3.0, Width: 1200, Height: 896},
 		{Ratio: 3.0 / 4.0, Width: 896, Height: 1200},
 		{Ratio: 5.0 / 4.0, Width: 1152, Height: 928},

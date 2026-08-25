@@ -140,20 +140,20 @@ func TestResolveGPTImageSizeMode1K(t *testing.T) {
 		{size: "", aspectRatio: "", wantWidth: 1024, wantHeight: 1024, wantLabel: "1024x1024"},
 		{size: "1536x1536", aspectRatio: "", wantWidth: 1024, wantHeight: 1024, wantLabel: "1024x1024"},
 		{size: "2048x1024", aspectRatio: "", wantWidth: 1376, wantHeight: 768, wantLabel: "1376x768"},
-		{size: "512x768", aspectRatio: "", wantWidth: 848, wantHeight: 1264, wantLabel: "848x1264"},
-		{size: "1500×1000", aspectRatio: "", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
-		{size: "1500 * 1000", aspectRatio: "", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
+		{size: "512x768", aspectRatio: "", wantWidth: 1024, wantHeight: 1536, wantLabel: "1024x1536"},
+		{size: "1500×1000", aspectRatio: "", wantWidth: 1536, wantHeight: 1024, wantLabel: "1536x1024"},
+		{size: "1500 * 1000", aspectRatio: "", wantWidth: 1536, wantHeight: 1024, wantLabel: "1536x1024"},
 		{size: "1024x1024", aspectRatio: "", wantWidth: 1024, wantHeight: 1024, wantLabel: "1024x1024"},
-		{size: "848x1264", aspectRatio: "", wantWidth: 848, wantHeight: 1264, wantLabel: "848x1264"},
-		{size: "1264x848", aspectRatio: "", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
+		{size: "848x1264", aspectRatio: "", wantWidth: 1024, wantHeight: 1536, wantLabel: "1024x1536"},
+		{size: "1264x848", aspectRatio: "", wantWidth: 1536, wantHeight: 1024, wantLabel: "1536x1024"},
 		{size: "928x1152", aspectRatio: "", wantWidth: 928, wantHeight: 1152, wantLabel: "928x1152"},
 		{size: "1152x928", aspectRatio: "", wantWidth: 1152, wantHeight: 928, wantLabel: "1152x928"},
 		{size: "768x1376", aspectRatio: "", wantWidth: 768, wantHeight: 1376, wantLabel: "768x1376"},
 		{size: "1376x768", aspectRatio: "", wantWidth: 1376, wantHeight: 768, wantLabel: "1376x768"},
 		{size: "1584x672", aspectRatio: "", wantWidth: 1584, wantHeight: 672, wantLabel: "1584x672"},
 		{size: "672x1584", aspectRatio: "", wantWidth: 672, wantHeight: 1584, wantLabel: "672x1584"},
-		{size: "2:3", aspectRatio: "", wantWidth: 848, wantHeight: 1264, wantLabel: "848x1264"},
-		{size: "3:2", aspectRatio: "", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
+		{size: "2:3", aspectRatio: "", wantWidth: 1024, wantHeight: 1536, wantLabel: "1024x1536"},
+		{size: "3:2", aspectRatio: "", wantWidth: 1536, wantHeight: 1024, wantLabel: "1536x1024"},
 		{size: "", aspectRatio: "21:9", wantWidth: 1584, wantHeight: 672, wantLabel: "1584x672"},
 		{size: "", aspectRatio: "9:21", wantWidth: 672, wantHeight: 1584, wantLabel: "672x1584"},
 		{size: "bad-size", aspectRatio: "", wantWidth: 1024, wantHeight: 1024, wantLabel: "1024x1024"},
@@ -177,8 +177,8 @@ func TestResolveBananaImageSizeIgnoresGPTLegacyModeButNormalizesRequestSize(t *t
 	if err != nil {
 		t.Fatalf("resolveImageRequestSize banana error = %v", err)
 	}
-	if width != 2048 || height != 2048 || label != "2048x2048" {
-		t.Fatalf("banana request-normalized size = %dx%d %q, want 2048x2048", width, height, label)
+	if width != 1024 || height != 1024 || label != "1024x1024" {
+		t.Fatalf("banana request-normalized size = %dx%d %q, want 1024x1024", width, height, label)
 	}
 }
 
