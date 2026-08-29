@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -126,5 +127,34 @@ func TestSanitizeGeneratedFilename(t *testing.T) {
 		if got := sanitizeGeneratedFilename(c.in); got != c.want {
 			t.Fatalf("sanitizeGeneratedFilename(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestBuildOpenAIImageResponseDataRespectsResponseFormat(t *testing.T) {
+	cfg := config.Global()
+	original := cfg.GetAll()
+	cfg.SetAll(map[string]interface{}{})
+	t.Cleanup(func() { cfg.SetAll(original) })
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "demo.png"), []byte("fake-png-data"), 0o644); err != nil {
+		t.Fatalf("write generated file: %v", err)
+	}
+	srv := &Server{Config: cfg, GeneratedDir: dir}
+
+	urlData, err := srv.buildOpenAIImageResponseData([]string{"/generated/demo.png"}, "demo", "url")
+	if err != nil {
+		t.Fatalf("url response data error: %v", err)
+	}
+	if len(urlData) != 1 || urlData[0]["url"] != "/generated/demo.png" || urlData[0]["b64_json"] != "" {
+		t.Fatalf("unexpected url data: %#v", urlData)
+	}
+
+	b64Data, err := srv.buildOpenAIImageResponseData([]string{"/generated/demo.png"}, "demo", "b64_json")
+	if err != nil {
+		t.Fatalf("b64 response data error: %v", err)
+	}
+	if len(b64Data) != 1 || b64Data[0]["url"] != "" || b64Data[0]["b64_json"] != base64.StdEncoding.EncodeToString([]byte("fake-png-data")) {
+		t.Fatalf("unexpected b64 data: %#v", b64Data)
 	}
 }

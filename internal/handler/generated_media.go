@@ -169,6 +169,63 @@ func (s *Server) fetchGeneratedMediaPayload(sourceURL, generationID, mediaKind s
 	}, nil
 }
 
+func (s *Server) generatedMediaBytesForResponse(resultURL, generationID, mediaKind string) ([]byte, error) {
+	resultURL = strings.TrimSpace(resultURL)
+	if resultURL == "" {
+		return nil, fmt.Errorf("generated media url is required")
+	}
+	if fileName, ok := s.generatedLocalFileNameFromURL(resultURL); ok {
+		if s == nil || strings.TrimSpace(s.GeneratedDir) == "" {
+			return nil, fmt.Errorf("generated dir is not configured")
+		}
+		data, err := os.ReadFile(filepath.Join(s.GeneratedDir, fileName))
+		if err != nil {
+			return nil, fmt.Errorf("read generated media file: %w", err)
+		}
+		if len(data) == 0 {
+			return nil, fmt.Errorf("generated media file is empty")
+		}
+		return data, nil
+	}
+	payload, err := s.fetchGeneratedMediaPayloadWithRetry(resultURL, generationID, mediaKind)
+	if err != nil {
+		return nil, err
+	}
+	return payload.Data, nil
+}
+
+func (s *Server) generatedLocalFileNameFromURL(rawURL string) (string, bool) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return "", false
+	}
+	pathValue := ""
+	if strings.HasPrefix(rawURL, "/generated/") {
+		pathValue = rawURL
+	} else if parsed, err := url.Parse(rawURL); err == nil && parsed.Path != "" {
+		if s != nil && s.Config != nil {
+			baseURL := strings.TrimSpace(s.Config.GetString("public_base_url", ""))
+			if baseURL != "" {
+				if baseParsed, baseErr := url.Parse(baseURL); baseErr == nil && strings.EqualFold(parsed.Scheme, baseParsed.Scheme) && strings.EqualFold(parsed.Host, baseParsed.Host) {
+					pathValue = parsed.Path
+				}
+			}
+		}
+		if pathValue == "" && strings.HasPrefix(parsed.Path, "/generated/") {
+			pathValue = parsed.Path
+		}
+	}
+	if !strings.HasPrefix(pathValue, "/generated/") {
+		return "", false
+	}
+	fileName := strings.TrimPrefix(pathValue, "/generated/")
+	fileName = strings.TrimLeft(strings.ReplaceAll(fileName, "\\", "/"), "/")
+	if fileName == "" || strings.Contains(fileName, "../") || strings.Contains(fileName, "/..") || strings.Contains(fileName, "/") {
+		return "", false
+	}
+	return fileName, true
+}
+
 func (s *Server) saveGeneratedMediaToLocal(payload *generatedMediaPayload) (string, error) {
 	if payload == nil {
 		return "", fmt.Errorf("generated media payload is required")

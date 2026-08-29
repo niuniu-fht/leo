@@ -459,6 +459,11 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 		writeJSON(w, 400, errorResp("n must be between 1 and 4", "invalid_request_error"))
 		return
 	}
+	responseFormat, err := normalizeOpenAIImageResponseFormat(payload.ResponseFormat)
+	if err != nil {
+		writeJSON(w, 400, errorResp(err.Error(), "invalid_request_error"))
+		return
+	}
 
 	publicModelID, upstreamModelID, requestModel, quality := s.resolveImageGenerationModel(payload.Model)
 	sizeInfo, err := s.resolveImageRequestSizeDetails(publicModelID, payload.Size, payload.AspectRatio)
@@ -642,9 +647,15 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 	}
 	s.refreshTokenCredits(usedTokenID, session)
 
-	data := make([]map[string]string, 0, len(finalURLs))
-	for _, imageURL := range finalURLs {
-		data = append(data, map[string]string{"url": imageURL})
+	data, err := s.buildOpenAIImageResponseData(finalURLs, result.GenerationID, responseFormat)
+	if err != nil {
+		msg := fmt.Sprintf("build image response failed: %v", err)
+		if s.ReqLog != nil {
+			s.ReqLog.UpdateByGenerationID(result.GenerationID, "FAILED", 502, previewURL, "image", msg)
+			s.ReqLog.UpdateDuration(result.GenerationID, elapsedSec)
+		}
+		writeJSON(w, 502, errorResp(msg, "server_error"))
+		return
 	}
 	usage := buildOpenAIImageUsage(payload.Prompt, refURLs, sizeInfo.Width, sizeInfo.Height, quality, publicModelID, s)
 	writeJSON(w, 200, map[string]interface{}{
@@ -663,6 +674,43 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			"postprocess":       postprocess,
 		},
 	})
+}
+
+func normalizeOpenAIImageResponseFormat(value string) (string, error) {
+	format := strings.ToLower(strings.TrimSpace(value))
+	if format == "" {
+		format = "url"
+	}
+	switch format {
+	case "url", "b64_json":
+		return format, nil
+	default:
+		return "", fmt.Errorf("response_format must be one of url or b64_json")
+	}
+}
+
+func (s *Server) buildOpenAIImageResponseData(finalURLs []string, generationID string, responseFormat string) ([]map[string]string, error) {
+	format, err := normalizeOpenAIImageResponseFormat(responseFormat)
+	if err != nil {
+		return nil, err
+	}
+	data := make([]map[string]string, 0, len(finalURLs))
+	for idx, imageURL := range finalURLs {
+		if format == "b64_json" {
+			name := strings.TrimSpace(generationID)
+			if len(finalURLs) > 1 {
+				name = fmt.Sprintf("%s-%d", name, idx+1)
+			}
+			imageBytes, err := s.generatedMediaBytesForResponse(imageURL, name, "image")
+			if err != nil {
+				return nil, err
+			}
+			data = append(data, map[string]string{"b64_json": base64.StdEncoding.EncodeToString(imageBytes)})
+			continue
+		}
+		data = append(data, map[string]string{"url": imageURL})
+	}
+	return data, nil
 }
 
 func buildOpenAIImageUsage(prompt string, refURLs []string, width, height int, quality string, publicModelID string, s *Server) openAIImageUsage {
@@ -1237,16 +1285,17 @@ type openAIImageReferenceInput struct {
 }
 
 type openAIImageGenerationRequest struct {
-	Prompt       string                      `json:"prompt"`
-	Model        string                      `json:"model"`
-	N            int                         `json:"n"`
-	Size         string                      `json:"size"`
-	AspectRatio  string                      `json:"aspect_ratio"`
-	ImageURL     string                      `json:"image_url"`
-	ImageURLs    []string                    `json:"image_urls"`
-	ImageBase64  string                      `json:"image_base64"`
-	ImageBase64s []string                    `json:"image_base64s"`
-	Images       []openAIImageReferenceInput `json:"images"`
+	Prompt         string                      `json:"prompt"`
+	Model          string                      `json:"model"`
+	N              int                         `json:"n"`
+	Size           string                      `json:"size"`
+	AspectRatio    string                      `json:"aspect_ratio"`
+	ImageURL       string                      `json:"image_url"`
+	ImageURLs      []string                    `json:"image_urls"`
+	ImageBase64    string                      `json:"image_base64"`
+	ImageBase64s   []string                    `json:"image_base64s"`
+	Images         []openAIImageReferenceInput `json:"images"`
+	ResponseFormat string                      `json:"response_format"`
 }
 
 func parseOpenAIImageEditRequest(r *http.Request) (openAIImageGenerationRequest, error) {
@@ -1264,10 +1313,11 @@ func parseOpenAIImageEditRequest(r *http.Request) (openAIImageGenerationRequest,
 	}
 
 	payload := openAIImageGenerationRequest{
-		Prompt:      firstFormValue(r, "prompt"),
-		Model:       firstFormValue(r, "model"),
-		Size:        firstFormValue(r, "size"),
-		AspectRatio: firstFormValue(r, "aspect_ratio"),
+		Prompt:         firstFormValue(r, "prompt"),
+		Model:          firstFormValue(r, "model"),
+		Size:           firstFormValue(r, "size"),
+		AspectRatio:    firstFormValue(r, "aspect_ratio"),
+		ResponseFormat: firstFormValue(r, "response_format"),
 	}
 	if rawN := strings.TrimSpace(firstFormValue(r, "n")); rawN != "" {
 		n, err := strconv.Atoi(rawN)
