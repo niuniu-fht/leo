@@ -116,7 +116,18 @@ func (s *Server) callAdobe2APITransparentEdit(ctx context.Context, client *http.
 	}
 	item := parsed.Data[0]
 	if rawURL := strings.TrimSpace(item.URL); rawURL != "" {
-		return resolveAdobe2APIResultURL(baseURL, rawURL), nil
+		resolvedURL := resolveAdobe2APIResultURL(baseURL, rawURL)
+		name := strings.TrimSpace(generationID)
+		if len(parsed.Data) > 1 || index > 0 {
+			name = fmt.Sprintf("%s-clarity-%d", name, index+1)
+		} else {
+			name = fmt.Sprintf("%s-clarity", name)
+		}
+		localURL, err := s.materializeGeneratedMedia(resolvedURL, name, "image")
+		if err != nil {
+			return "", fmt.Errorf("materialize adobe2api result failed: %w", err)
+		}
+		return localURL, nil
 	}
 	rawB64 := strings.TrimSpace(item.B64JSON)
 	if rawB64 == "" {
