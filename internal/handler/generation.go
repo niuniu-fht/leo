@@ -300,6 +300,9 @@ type Server struct {
 	tokenPrepLeases         map[string]time.Time
 	tokenSettlementMu       sync.Mutex
 	tokenSettlements        map[string]int
+	tokenBucketLoopMu       sync.Mutex
+	tokenBucketLoopStarted  bool
+	tokenBuckets            *tokenDispatchBuckets
 }
 
 type generationRetryPolicy struct {
@@ -3552,3 +3555,4 @@ func extractRetryCodeSource(raw string) string {
 	}
 	return strings.Join(parts, " ")
 }
+

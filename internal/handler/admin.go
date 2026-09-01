@@ -296,6 +296,7 @@ func (s *Server) HandleTokenAdd(w http.ResponseWriter, r *http.Request) {
 					s.TokenMgr.UpdateAccountInfo(tokenID, session.HasuraUserID, session.Email)
 					if credits != nil {
 						s.TokenMgr.UpdateCreditsWithRenewalDate(tokenID, float64(credits.TotalTokens), float64(credits.SubscriptionTokens+credits.PaidTokens+credits.RolloverTokens), credits.TokenRenewalDate)
+						s.refreshTokenDispatchBucketForToken(tokenID)
 						s.TokenMgr.UpdateExpiry(tokenID, float64(session.JWTExpiry.Unix()))
 					}
 				}
@@ -494,6 +495,8 @@ func (s *Server) validateLeonardoTokenAsync(tokenID, rawToken string) {
 		totalCredits := float64(credits.SubscriptionTokens + credits.PaidTokens + credits.RolloverTokens)
 		if err := s.TokenMgr.UpdateCreditsWithRenewalDate(tokenID, float64(credits.TotalTokens), totalCredits, credits.TokenRenewalDate); err != nil {
 			log.Printf("[token] failed to update Leonardo credits for %s: %v", tokenID, err)
+		} else {
+			s.refreshTokenDispatchBucketForToken(tokenID)
 		}
 	}
 	if err := s.TokenMgr.UpdateExpiry(tokenID, float64(session.JWTExpiry.Unix())); err != nil {
@@ -662,6 +665,7 @@ func (s *Server) HandleTokenDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.tokenLifecycleMu.Unlock()
+	s.refreshTokenDispatchBucketForToken(tokenID)
 	writeJSON(w, 200, map[string]interface{}{"ok": true})
 }
 
@@ -693,6 +697,7 @@ func (s *Server) HandleTokenStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"detail": err.Error()})
 		return
 	}
+	s.refreshTokenDispatchBucketForToken(tokenID)
 	writeJSON(w, 200, map[string]interface{}{"ok": true})
 }
 
@@ -730,6 +735,9 @@ func (s *Server) HandleDeleteBatch(w http.ResponseWriter, r *http.Request) {
 	}
 	deletedIDs, missing := s.TokenMgr.RemoveMany(deletableIDs)
 	s.tokenLifecycleMu.Unlock()
+	for _, id := range deletedIDs {
+		s.refreshTokenDispatchBucketForToken(id)
+	}
 	writeJSON(w, 200, map[string]interface{}{
 		"ok":                    true,
 		"deleted":               len(deletedIDs),
@@ -815,6 +823,7 @@ func (s *Server) HandleTokenStatusBatch(w http.ResponseWriter, r *http.Request) 
 			failed++
 			continue
 		}
+		s.refreshTokenDispatchBucketForToken(id)
 		updated++
 	}
 	writeJSON(w, 200, map[string]interface{}{
@@ -862,6 +871,7 @@ func (s *Server) HandleTokenAutoRefreshBatch(w http.ResponseWriter, r *http.Requ
 			failed++
 			continue
 		}
+		s.refreshTokenDispatchBucketForToken(id)
 		updated++
 		if body.Enabled {
 			s.triggerTokenAutoRefresh(id)
@@ -1012,6 +1022,7 @@ func (s *Server) HandleCheckInvalidTokensBatch(w http.ResponseWriter, r *http.Re
 		s.restoreTokenAfterSuccessfulRefresh(id)
 		if credits != nil {
 			s.TokenMgr.UpdateCreditsWithRenewalDate(id, float64(credits.TotalTokens), float64(credits.SubscriptionTokens+credits.PaidTokens+credits.RolloverTokens), credits.TokenRenewalDate)
+			s.refreshTokenDispatchBucketForToken(id)
 			item["credits"] = credits.TotalTokens
 		}
 		s.TokenMgr.UpdateExpiry(id, float64(session.JWTExpiry.Unix()))
@@ -1058,6 +1069,7 @@ func (s *Server) HandleAdminConfig(w http.ResponseWriter, r *http.Request) {
 		all["auto_refresh_max_concurrency"] = normalizeConfigInt(all["auto_refresh_max_concurrency"], 5, 1, 50)
 		all["token_max_running_tasks"] = normalizeConfigInt(all["token_max_running_tasks"], defaultTokenMaxRunningTasks, 1, 10)
 		all["token_exhaustion_credit_threshold"] = normalizeConfigInt(all["token_exhaustion_credit_threshold"], defaultTokenExhaustionCreditThreshold, 0, 1000000)
+		all["token_bucket_rebuild_interval_minutes"] = normalizeConfigInt(all["token_bucket_rebuild_interval_minutes"], int(defaultTokenDispatchBucketRebuildInterval/time.Minute), 1, 60)
 		all["exhausted_token_auto_cleanup_enabled"] = toBool(all["exhausted_token_auto_cleanup_enabled"])
 		all["exhausted_token_auto_cleanup_interval_hours"] = normalizeConfigInt(all["exhausted_token_auto_cleanup_interval_hours"], 24, 1, 8760)
 		all["request_log_retention_limit"] = normalizeConfigInt(all["request_log_retention_limit"], 5000, 100, 100000)
@@ -1100,6 +1112,7 @@ func (s *Server) HandleAdminConfig(w http.ResponseWriter, r *http.Request) {
 	updates["auto_refresh_max_concurrency"] = normalizeConfigInt(updates["auto_refresh_max_concurrency"], 5, 1, 50)
 	updates["token_max_running_tasks"] = normalizeConfigInt(updates["token_max_running_tasks"], defaultTokenMaxRunningTasks, 1, 10)
 	updates["token_exhaustion_credit_threshold"] = normalizeConfigInt(updates["token_exhaustion_credit_threshold"], defaultTokenExhaustionCreditThreshold, 0, 1000000)
+	updates["token_bucket_rebuild_interval_minutes"] = normalizeConfigInt(updates["token_bucket_rebuild_interval_minutes"], int(defaultTokenDispatchBucketRebuildInterval/time.Minute), 1, 60)
 	delete(updates, "sora2_dedicated_mode_enabled")
 	updates["exhausted_token_auto_cleanup_enabled"] = toBool(updates["exhausted_token_auto_cleanup_enabled"])
 	updates["exhausted_token_auto_cleanup_interval_hours"] = normalizeConfigInt(updates["exhausted_token_auto_cleanup_interval_hours"], 24, 1, 8760)
@@ -1117,6 +1130,7 @@ func (s *Server) HandleAdminConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.reloadRuntimeClients()
+	s.rebuildTokenDispatchBuckets("config_update")
 	resp := map[string]interface{}{"ok": true}
 	stats, statsErr := s.enforceGeneratedStorageLimit()
 	resp["generated_usage_mb"] = generatedStorageUsageMB(stats.Bytes)
@@ -1358,6 +1372,7 @@ func (s *Server) HandleTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		s.restoreTokenAfterSuccessfulRefresh(tokenID)
 		if credits != nil {
 			s.TokenMgr.UpdateCreditsWithRenewalDate(tokenID, float64(credits.TotalTokens), float64(credits.SubscriptionTokens+credits.PaidTokens+credits.RolloverTokens), credits.TokenRenewalDate)
+			s.refreshTokenDispatchBucketForToken(tokenID)
 		}
 		s.TokenMgr.UpdateExpiry(tokenID, float64(session.JWTExpiry.Unix()))
 		s.TokenMgr.UpdateAccountInfo(tokenID, session.HasuraUserID, session.Email)
@@ -1448,6 +1463,7 @@ func (s *Server) HandleTokenRefreshExpiryTest(w http.ResponseWriter, r *http.Req
 	_ = s.TokenMgr.UpdateAccountInfo(tokenID, session.HasuraUserID, session.Email)
 	if credits != nil {
 		_ = s.TokenMgr.UpdateCreditsWithRenewalDate(tokenID, float64(credits.TotalTokens), float64(credits.SubscriptionTokens+credits.PaidTokens+credits.RolloverTokens), credits.TokenRenewalDate)
+		s.refreshTokenDispatchBucketForToken(tokenID)
 	}
 
 	result := map[string]interface{}{
@@ -1482,6 +1498,7 @@ func (s *Server) HandleTokenAutoRefresh(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, 404, map[string]string{"detail": err.Error()})
 		return
 	}
+	s.refreshTokenDispatchBucketForToken(tokenID)
 	if enabled {
 		s.triggerTokenAutoRefresh(tokenID)
 	}
@@ -2214,6 +2231,7 @@ func (s *Server) runCookieImportJob(jobID string, inputs []cookieImportInput) {
 						if credits != nil {
 							totalCredits := float64(credits.SubscriptionTokens + credits.PaidTokens + credits.RolloverTokens)
 							_ = s.TokenMgr.UpdateCreditsWithRenewalDate(tokenID, float64(credits.TotalTokens), totalCredits, credits.TokenRenewalDate)
+							s.refreshTokenDispatchBucketForToken(tokenID)
 							detail = fmt.Sprintf("导入并刷新成功，剩余积分 %d", credits.TotalTokens)
 						} else {
 							detail = "导入并刷新成功"
@@ -2440,6 +2458,7 @@ func (s *Server) runTokenRefreshBatchJob(jobID string, ids []string) {
 					s.restoreTokenAfterSuccessfulRefresh(id)
 					if credits != nil {
 						_ = s.TokenMgr.UpdateCreditsWithRenewalDate(id, float64(credits.TotalTokens), float64(credits.SubscriptionTokens+credits.PaidTokens+credits.RolloverTokens), credits.TokenRenewalDate)
+						s.refreshTokenDispatchBucketForToken(id)
 						detail = fmt.Sprintf("刷新成功，剩余积分 %d", credits.TotalTokens)
 					}
 					_ = s.TokenMgr.UpdateExpiry(id, float64(session.JWTExpiry.Unix()))
@@ -4127,6 +4146,7 @@ func (s *Server) refreshTokenCredits(tokenID string, session *leonardo.TokenSess
 	if credits != nil {
 		availableCredits := float64(credits.TotalTokens)
 		s.TokenMgr.UpdateCreditsWithRenewalDate(tokenID, availableCredits, float64(credits.SubscriptionTokens+credits.PaidTokens+credits.RolloverTokens), credits.TokenRenewalDate)
+		s.refreshTokenDispatchBucketForToken(tokenID)
 		log.Printf("[poll] refreshed credits for token %s: %d remaining", tokenID, credits.TotalTokens)
 		s.markTokenExhaustedIfBelowGenerationMinimum(tokenID, availableCredits, "remaining credits below video generation minimum after credits refresh")
 	}
@@ -4163,6 +4183,7 @@ func (s *Server) applyFailedGenerationCredits(tokenID string, availableCredits f
 		return
 	}
 	log.Printf("[poll] reconciled credits after failed generation %s for token %s: %.0f remaining", generationID, tokenID, availableCredits)
+	s.refreshTokenDispatchBucketForToken(tokenID)
 
 	if availableCredits < s.tokenExhaustionCreditThreshold() {
 		s.markTokenExhaustedIfBelowGenerationMinimum(tokenID, availableCredits, "remaining credits below video generation minimum after failed generation refund check")
@@ -4180,6 +4201,7 @@ func (s *Server) applyFailedGenerationCredits(tokenID string, availableCredits f
 	if err := s.TokenMgr.SetAutoRefresh(tokenID, true); err != nil {
 		log.Printf("[token] failed to restore auto-refresh after failed generation %s for %s: %v", generationID, tokenID, err)
 	}
+	s.refreshTokenDispatchBucketForToken(tokenID)
 	log.Printf("[token] restored token %s after failed generation %s refund: %.0f credits available", tokenID, generationID, availableCredits)
 }
 
@@ -4225,6 +4247,7 @@ func (s *Server) markTokenExhausted(tokenID string, reason string) {
 	if err := s.TokenMgr.SetAutoRefresh(tokenID, false); err != nil {
 		log.Printf("[token] failed to disable auto-refresh for exhausted token %s: %v", tokenID, err)
 	}
+	s.refreshTokenDispatchBucketForToken(tokenID)
 	log.Printf("[token] marked token exhausted %s: %s", tokenID, strings.TrimSpace(reason))
 }
 
@@ -4259,6 +4282,7 @@ func (s *Server) applyTokenCreditCost(tokenID string, creditCost int) {
 		return
 	}
 	log.Printf("[poll] applied credit cost for token %s: -%d, %.0f remaining", tokenID, creditCost, next)
+	s.refreshTokenDispatchBucketForToken(tokenID)
 	s.markTokenExhaustedIfBelowGenerationMinimum(tokenID, next, "remaining credits below video generation minimum after accepted generation")
 }
 
@@ -4521,6 +4545,10 @@ func (s *Server) getLeonardoSessionForModelExcludingWithPreparationLease(tokenID
 		return session, usedTokenID, func() { s.releaseTokenPreparation(usedTokenID) }
 	}
 
+	if session, usedTokenID, bucketRelease := s.getLeonardoSessionFromDispatchBucket(modelID, imageSizeTier, excluded, true); session != nil && usedTokenID != "" {
+		return session, usedTokenID, bucketRelease
+	}
+
 	s.tokenSelectionMu.Lock()
 	defer s.tokenSelectionMu.Unlock()
 
@@ -4642,6 +4670,11 @@ func (s *Server) getLeonardoSessionForModel(tokenID string, modelID string, imag
 			return nil, ""
 		}
 		return session, tokenID
+	}
+
+	if session, usedTokenID, bucketRelease := s.getLeonardoSessionFromDispatchBucket(modelID, imageSizeTier, nil, false); session != nil && usedTokenID != "" {
+		bucketRelease()
+		return session, usedTokenID
 	}
 
 	s.tokenSelectionMu.Lock()

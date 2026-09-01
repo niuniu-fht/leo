@@ -106,6 +106,7 @@ func main() {
 		LeonardoClient: leoClient,
 		ReqLog:         reqLogStore,
 	}
+	srv.StartTokenDispatchBucketLoop()
 	srv.StartTokenAutoRefreshLoop()
 	srv.StartExhaustedTokenCleanupLoop()
 
@@ -336,3 +337,4 @@ func shouldSkipAccessLog(path string) bool {
 	}
 	return false
 }
+
