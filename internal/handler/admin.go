@@ -4851,6 +4851,8 @@ func imageCreditThresholdBucket(modelID string) string {
 		return "gpt_image_gemini_3_1_flash_image"
 	}
 	switch model {
+	case "gpt-image-1k":
+		return "gpt_image_2"
 	case "gpt-image-2-high":
 		return "gpt_image_2_high"
 	case "gpt-image-2-higher":

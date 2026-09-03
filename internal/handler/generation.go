@@ -44,6 +44,13 @@ var imageModelAliases = map[string]imageModelAlias{
 		Quality:         "low",
 		Description:     "Leonardo GPT Image-2 image generation",
 	},
+	"gpt-image-1k": {
+		PublicID:        "gpt-image-1k",
+		UpstreamModelID: "135b2740-a20b-48c8-8f86-6f68199e06c5",
+		RequestModel:    "gpt-image-2",
+		Quality:         "low",
+		Description:     "Leonardo GPT Image-2 low quality 1k image generation",
+	},
 	"gpt-image-2-high": {
 		PublicID:        "gpt-image-2-high",
 		UpstreamModelID: "135b2740-a20b-48c8-8f86-6f68199e06c5",
@@ -143,6 +150,7 @@ func imageCatalogEntry(id, description, quality string, aliases []string) map[st
 
 var openAIModelCatalog = []map[string]interface{}{
 	imageCatalogEntry("gpt-image-2", "Leonardo GPT Image-2 image generation", "low", nil),
+	imageCatalogEntry("gpt-image-1k", "Leonardo GPT Image-2 low quality 1k image generation", "low", nil),
 	imageCatalogEntry("gpt-image-2-high", "Leonardo GPT Image-2 image generation", "medium", nil),
 	imageCatalogEntry("gpt-image-2-higher", "Leonardo GPT Image-2 image generation", "high", nil),
 	imageCatalogEntry("gpt-image-2-clarity", "Leonardo GPT Image-2 low quality generation + Adobe2API transparent background", "low", nil),
@@ -1561,6 +1569,9 @@ func imageSizeModeConfigKey(modelID string) string {
 
 func (s *Server) imageSizeModeForModel(publicModelID string) string {
 	modelID := strings.ToLower(strings.TrimSpace(publicModelID))
+	if modelID == "gpt-image-1k" {
+		return "1k"
+	}
 	if s == nil || s.Config == nil {
 		return "request"
 	}
@@ -1574,7 +1585,8 @@ func (s *Server) imageSizeModeForModel(publicModelID string) string {
 }
 
 func isGPTImagePublicModel(publicModelID string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(publicModelID)), "gpt-image-2")
+	modelID := strings.ToLower(strings.TrimSpace(publicModelID))
+	return strings.HasPrefix(modelID, "gpt-image-2") || modelID == "gpt-image-1k"
 }
 
 func isBananaImagePublicModel(publicModelID string) bool {
@@ -1996,7 +2008,7 @@ func imageAliasForModelID(modelID string) (imageModelAlias, bool) {
 
 func imageUsesNativeRequest(modelID string) bool {
 	modelID = strings.ToLower(strings.TrimSpace(modelID))
-	return modelID == "gpt-image-2" || modelID == "gpt-image-2-high" || modelID == "gpt-image-2-higher" || modelID == "gpt-image-2-clarity" || modelID == "bananapro"
+	return modelID == "gpt-image-1k" || modelID == "gpt-image-2" || modelID == "gpt-image-2-high" || modelID == "gpt-image-2-higher" || modelID == "gpt-image-2-clarity" || modelID == "bananapro"
 }
 
 func imageUsesGeminiImage2Request(publicModelID string, requestModel string) bool {
@@ -2070,7 +2082,7 @@ func (s *Server) resolveImageGenerationModel(model string) (publicModelID string
 		} else if knownAlias {
 			if publicSpecific := strings.TrimSpace(s.Config.GetString(imageModelConfigKey(publicModelID))); publicSpecific != "" {
 				upstreamModelID = publicSpecific
-			} else if publicModelID == "gpt-image-2" {
+			} else if publicModelID == "gpt-image-2" || publicModelID == "gpt-image-1k" {
 				if baseModelID := strings.TrimSpace(s.Config.GetString("image_model_id_gpt_image_2")); baseModelID != "" {
 					upstreamModelID = baseModelID
 				}
@@ -2078,6 +2090,10 @@ func (s *Server) resolveImageGenerationModel(model string) (publicModelID string
 		} else if genericModelID := strings.TrimSpace(s.Config.GetString("image_model_id")); genericModelID != "" {
 			upstreamModelID = genericModelID
 		}
+	}
+	if requestedModelID == "gpt-image-1k" {
+		requestModel = "gpt-image-2"
+		quality = "low"
 	}
 	if requestModel == "" {
 		requestModel = "nano-banana-2"
@@ -3555,4 +3571,3 @@ func extractRetryCodeSource(raw string) string {
 	}
 	return strings.Join(parts, " ")
 }
-

@@ -2558,6 +2558,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       || operation.includes("images.")
       || path.includes("/v1/images/")
       || model.startsWith("gpt-image-2")
+      || model === "gpt-image-1k"
       || model.includes("banana");
     if (isImage) {
       const isImageToImage = inputMode === "image_to_image"

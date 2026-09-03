@@ -14,6 +14,7 @@ func TestImageQualityForModelID(t *testing.T) {
 		want  string
 	}{
 		{model: "", want: "low"},
+		{model: "gpt-image-1k", want: "low"},
 		{model: "gpt-image-2", want: "low"},
 		{model: "gpt-image-2-high", want: "medium"},
 		{model: "gpt-image-2-higher", want: "high"},
@@ -45,6 +46,7 @@ func TestResolveImageGenerationModelAliases(t *testing.T) {
 		wantQuality       string
 	}{
 		{input: "gpt-image-2", wantPublic: "gpt-image-2", wantUpstreamModel: "135b2740-a20b-48c8-8f86-6f68199e06c5", wantRequestModel: "gpt-image-2", wantQuality: "low"},
+		{input: "gpt-image-1k", wantPublic: "gpt-image-1k", wantUpstreamModel: "135b2740-a20b-48c8-8f86-6f68199e06c5", wantRequestModel: "gpt-image-2", wantQuality: "low"},
 		{input: "gpt-image-2-clarity", wantPublic: "gpt-image-2-clarity", wantUpstreamModel: "135b2740-a20b-48c8-8f86-6f68199e06c5", wantRequestModel: "gpt-image-2", wantQuality: "low"},
 		{input: "banana2", wantPublic: "banana2", wantUpstreamModel: "7418e71f-4133-4e1b-9895-bee19f48f2ce", wantRequestModel: "nano-banana-2", wantQuality: "medium"},
 		{input: "bananapro", wantPublic: "bananapro", wantUpstreamModel: "7c02ef35-3a6b-4df6-b78d-873e5032c3b4", wantRequestModel: "gemini-image-2", wantQuality: "high"},
@@ -98,6 +100,19 @@ func TestKnownImageAliasIgnoresGlobalRequestModel(t *testing.T) {
 	public, _, requestModel, quality := s.resolveImageGenerationModel("gpt-image-2-clarity")
 	if public != "gpt-image-2-clarity" || requestModel != "gpt-image-2" || quality != "low" {
 		t.Fatalf("clarity resolve = public=%q request=%q quality=%q; want clarity gpt-image-2 low", public, requestModel, quality)
+	}
+}
+
+func TestGPTImage1KUsesGPTImage2ModelConfigButForcesLowQuality(t *testing.T) {
+	cfg := config.New()
+	cfg.Set("image_model_id_gpt_image_2", "base-gpt-image-2-model")
+	cfg.Set("image_quality_gpt_image_1k", "high")
+	cfg.Set("image_request_model_gpt_image_1k", "nano-banana-2")
+	s := &Server{Config: cfg}
+
+	public, upstream, requestModel, quality := s.resolveImageGenerationModel("gpt-image-1k")
+	if public != "gpt-image-1k" || upstream != "base-gpt-image-2-model" || requestModel != "gpt-image-2" || quality != "low" {
+		t.Fatalf("gpt-image-1k resolve = public=%q upstream=%q request=%q quality=%q; want public=gpt-image-1k upstream=base-gpt-image-2-model request=gpt-image-2 quality=low", public, upstream, requestModel, quality)
 	}
 }
 
@@ -235,6 +250,28 @@ func TestResolveGPTImage2RequestModeInfersScaleByArea(t *testing.T) {
 			t.Fatalf("resolveImageRequestSizeDetails(%q) = %dx%d tier=%q ratio=%q, want %dx%d tier=%q ratio=%q",
 				tt.size, info.Width, info.Height, info.TierLabel, info.RatioLabel, tt.wantWidth, tt.wantHeight, tt.wantTier, tt.wantRatio)
 		}
+	}
+}
+
+func TestResolveGPTImage1KAlwaysUses1KWithoutChangingGPTImage2(t *testing.T) {
+	cfg := config.New()
+	cfg.Set("image_size_mode_gpt_image_2", "request")
+	s := &Server{Config: cfg}
+
+	info, err := s.resolveImageRequestSizeDetails("gpt-image-1k", "3000x2000", "")
+	if err != nil {
+		t.Fatalf("resolveImageRequestSizeDetails gpt-image-1k error = %v", err)
+	}
+	if info.Width != 1536 || info.Height != 1024 || info.TierLabel != "1k" || info.RatioLabel != "3:2" {
+		t.Fatalf("gpt-image-1k size = %dx%d tier=%q ratio=%q, want 1536x1024 tier=1k ratio=3:2", info.Width, info.Height, info.TierLabel, info.RatioLabel)
+	}
+
+	baseInfo, err := s.resolveImageRequestSizeDetails("gpt-image-2", "3000x2000", "")
+	if err != nil {
+		t.Fatalf("resolveImageRequestSizeDetails gpt-image-2 error = %v", err)
+	}
+	if baseInfo.Width != 2048 || baseInfo.Height != 1376 || baseInfo.TierLabel != "2k" || baseInfo.RatioLabel != "3:2" {
+		t.Fatalf("gpt-image-2 size = %dx%d tier=%q ratio=%q, want 2048x1376 tier=2k ratio=3:2", baseInfo.Width, baseInfo.Height, baseInfo.TierLabel, baseInfo.RatioLabel)
 	}
 }
 
