@@ -118,7 +118,12 @@ func (s *Server) HandleTokenList(w http.ResponseWriter, r *http.Request) {
 		var tmp []map[string]interface{}
 		for _, t := range filtered {
 			ts := strings.ToLower(fmt.Sprintf("%v", t["status"]))
-			if ts == statusFilter {
+			matches := ts == statusFilter
+			if statusFilter == "no_jwt" {
+				reason := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", t["refresh_fail_reason"])))
+				matches = strings.Contains(reason, "no jwt found") || strings.Contains(reason, "missing jwt")
+			}
+			if matches {
 				tmp = append(tmp, t)
 			}
 		}
@@ -770,7 +775,7 @@ func (s *Server) HandleTokenCleanupStatus(w http.ResponseWriter, r *http.Request
 
 	status := strings.ToLower(strings.TrimSpace(body.Status))
 	if !isTokenCleanupStatus(status) {
-		writeJSON(w, 400, map[string]string{"detail": "status must be invalid, exhausted, or abnormal"})
+		writeJSON(w, 400, map[string]string{"detail": "status must be invalid, exhausted, abnormal, or no_jwt"})
 		return
 	}
 

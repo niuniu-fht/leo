@@ -114,6 +114,11 @@ func (s *Server) cleanupTokensByStatus(status string) tokenCleanupResult {
 			if tokenStatus == "abnormal" {
 				matched = true
 			}
+		case "no_jwt":
+			reason := strings.ToLower(strings.TrimSpace(toString(info["refresh_fail_reason"])))
+			if strings.Contains(reason, "no jwt found") || strings.Contains(reason, "missing jwt") {
+				matched = true
+			}
 		}
 		if !matched {
 			continue
@@ -145,7 +150,7 @@ func (s *Server) tokenHasActiveGenerationWork(tokenID string) bool {
 
 func isTokenCleanupStatus(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "invalid", "exhausted", "abnormal":
+	case "invalid", "exhausted", "abnormal", "no_jwt":
 		return true
 	default:
 		return false

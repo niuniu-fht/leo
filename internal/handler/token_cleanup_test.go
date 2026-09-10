@@ -37,6 +37,33 @@ func TestCleanupTokensByStatusDeletesOnlyExhaustedTokens(t *testing.T) {
 	}
 }
 
+func TestCleanupTokensByStatusDeletesOnlyNoJWTFailures(t *testing.T) {
+	mgr := token.NewManager(nil)
+	noJWT, _, err := mgr.Add("no-jwt-token", "leonardo", "session_token", "", "", "test")
+	if err != nil {
+		t.Fatalf("add no-jwt token: %v", err)
+	}
+	abnormal, _, err := mgr.Add("other-abnormal-token", "leonardo", "session_token", "", "", "test")
+	if err != nil {
+		t.Fatalf("add abnormal token: %v", err)
+	}
+	noJWTID := toString(noJWT["id"])
+	abnormalID := toString(abnormal["id"])
+	mgr.ReportRefreshFailure(noJWTID, "no JWT found")
+	mgr.ReportRefreshFailure(abnormalID, "upstream challenge")
+
+	result := (&Server{TokenMgr: mgr}).cleanupTokensByStatus("no_jwt")
+	if result.MatchedCount != 1 || result.DeletedCount != 1 || result.FailedCount != 0 {
+		t.Fatalf("unexpected cleanup result: %+v", result)
+	}
+	if mgr.GetByID(noJWTID) != nil {
+		t.Fatal("no JWT token should be deleted")
+	}
+	if mgr.GetByID(abnormalID) == nil {
+		t.Fatal("other abnormal token should remain")
+	}
+}
+
 func TestCleanupTokensByStatusTreatsExpiredAsInvalid(t *testing.T) {
 	mgr := token.NewManager(nil)
 	expiredInfo, _, err := mgr.Add("expired-token", "leonardo", "session_token", "", "", "test")

@@ -69,6 +69,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const disableAutoRefreshBatchBtn = document.getElementById("disableAutoRefreshBatchBtn");
   const refreshTokensBatchBtn = document.getElementById("refreshTokensBatchBtn");
   const cleanupInvalidTokensBtn = document.getElementById("cleanupInvalidTokensBtn");
+  const cleanupNoJWTTokensBtn = document.getElementById("cleanupNoJWTTokensBtn");
   const cleanupExhaustedTokensBtn = document.getElementById("cleanupExhaustedTokensBtn");
   const cleanupConfirmModal = document.getElementById("cleanupConfirmModal");
   const cleanupConfirmTitle = document.getElementById("cleanupConfirmTitle");
@@ -1074,6 +1075,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (cleanupInvalidTokensBtn) {
     cleanupInvalidTokensBtn.addEventListener("click", () => {
       openCleanupConfirm("abnormal", "异常", cleanupInvalidTokensBtn);
+    });
+  }
+
+  if (cleanupNoJWTTokensBtn) {
+    cleanupNoJWTTokensBtn.addEventListener("click", () => {
+      openCleanupConfirm("no_jwt", "no JWT", cleanupNoJWTTokensBtn);
     });
   }
 

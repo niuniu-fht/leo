@@ -16,6 +16,8 @@ func TestImageQualityForModelID(t *testing.T) {
 		{model: "", want: "low"},
 		{model: "gpt-image-1k", want: "low"},
 		{model: "gpt-image-2", want: "low"},
+		{model: "gpt-image-2.5-flare", want: "low"},
+		{model: "gpt-image-2.5-sunburst", want: "low"},
 		{model: "gpt-image-2-high", want: "medium"},
 		{model: "gpt-image-2-higher", want: "high"},
 		{model: "gpt-image-2-clarity", want: "low"},
@@ -46,6 +48,8 @@ func TestResolveImageGenerationModelAliases(t *testing.T) {
 		wantQuality       string
 	}{
 		{input: "gpt-image-2", wantPublic: "gpt-image-2", wantUpstreamModel: "135b2740-a20b-48c8-8f86-6f68199e06c5", wantRequestModel: "gpt-image-2", wantQuality: "low"},
+		{input: "gpt-image-2.5-flare", wantPublic: "gpt-image-2.5-flare", wantUpstreamModel: "135b2740-a20b-48c8-8f86-6f68199e06c5", wantRequestModel: "openai/gpt-image-2.5-flare", wantQuality: "low"},
+		{input: "gpt-image-2.5-sunburst", wantPublic: "gpt-image-2.5-sunburst", wantUpstreamModel: "135b2740-a20b-48c8-8f86-6f68199e06c5", wantRequestModel: "openai/gpt-image-2.5-sunburst", wantQuality: "low"},
 		{input: "gpt-image-1k", wantPublic: "gpt-image-1k", wantUpstreamModel: "135b2740-a20b-48c8-8f86-6f68199e06c5", wantRequestModel: "gpt-image-2", wantQuality: "low"},
 		{input: "gpt-image-2-clarity", wantPublic: "gpt-image-2-clarity", wantUpstreamModel: "135b2740-a20b-48c8-8f86-6f68199e06c5", wantRequestModel: "gpt-image-2", wantQuality: "low"},
 		{input: "banana2", wantPublic: "banana2", wantUpstreamModel: "7418e71f-4133-4e1b-9895-bee19f48f2ce", wantRequestModel: "nano-banana-2", wantQuality: "medium"},
@@ -155,20 +159,20 @@ func TestResolveGPTImageSizeMode1K(t *testing.T) {
 		{size: "", aspectRatio: "", wantWidth: 1024, wantHeight: 1024, wantLabel: "1024x1024"},
 		{size: "1536x1536", aspectRatio: "", wantWidth: 1024, wantHeight: 1024, wantLabel: "1024x1024"},
 		{size: "2048x1024", aspectRatio: "", wantWidth: 1376, wantHeight: 768, wantLabel: "1376x768"},
-		{size: "512x768", aspectRatio: "", wantWidth: 1024, wantHeight: 1536, wantLabel: "1024x1536"},
-		{size: "1500×1000", aspectRatio: "", wantWidth: 1536, wantHeight: 1024, wantLabel: "1536x1024"},
-		{size: "1500 * 1000", aspectRatio: "", wantWidth: 1536, wantHeight: 1024, wantLabel: "1536x1024"},
+		{size: "512x768", aspectRatio: "", wantWidth: 848, wantHeight: 1264, wantLabel: "848x1264"},
+		{size: "1500×1000", aspectRatio: "", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
+		{size: "1500 * 1000", aspectRatio: "", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
 		{size: "1024x1024", aspectRatio: "", wantWidth: 1024, wantHeight: 1024, wantLabel: "1024x1024"},
-		{size: "848x1264", aspectRatio: "", wantWidth: 1024, wantHeight: 1536, wantLabel: "1024x1536"},
-		{size: "1264x848", aspectRatio: "", wantWidth: 1536, wantHeight: 1024, wantLabel: "1536x1024"},
+		{size: "848x1264", aspectRatio: "", wantWidth: 848, wantHeight: 1264, wantLabel: "848x1264"},
+		{size: "1264x848", aspectRatio: "", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
 		{size: "928x1152", aspectRatio: "", wantWidth: 928, wantHeight: 1152, wantLabel: "928x1152"},
 		{size: "1152x928", aspectRatio: "", wantWidth: 1152, wantHeight: 928, wantLabel: "1152x928"},
 		{size: "768x1376", aspectRatio: "", wantWidth: 768, wantHeight: 1376, wantLabel: "768x1376"},
 		{size: "1376x768", aspectRatio: "", wantWidth: 1376, wantHeight: 768, wantLabel: "1376x768"},
 		{size: "1584x672", aspectRatio: "", wantWidth: 1584, wantHeight: 672, wantLabel: "1584x672"},
 		{size: "672x1584", aspectRatio: "", wantWidth: 672, wantHeight: 1584, wantLabel: "672x1584"},
-		{size: "2:3", aspectRatio: "", wantWidth: 1024, wantHeight: 1536, wantLabel: "1024x1536"},
-		{size: "3:2", aspectRatio: "", wantWidth: 1536, wantHeight: 1024, wantLabel: "1536x1024"},
+		{size: "2:3", aspectRatio: "", wantWidth: 848, wantHeight: 1264, wantLabel: "848x1264"},
+		{size: "3:2", aspectRatio: "", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
 		{size: "", aspectRatio: "21:9", wantWidth: 1584, wantHeight: 672, wantLabel: "1584x672"},
 		{size: "", aspectRatio: "9:21", wantWidth: 672, wantHeight: 1584, wantLabel: "672x1584"},
 		{size: "bad-size", aspectRatio: "", wantWidth: 1024, wantHeight: 1024, wantLabel: "1024x1024"},
@@ -210,6 +214,10 @@ func TestResolveImageSizeRequestModeInfersScale(t *testing.T) {
 		{model: "banana2", size: "1500x1000", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
 		{model: "bananapro", size: "2048x1632", wantWidth: 2304, wantHeight: 1856, wantLabel: "2304x1856"},
 		{model: "gpt-image-2", size: "1536x2048", wantWidth: 1536, wantHeight: 2048, wantLabel: "1536x2048"},
+		{model: "gpt-image-2.5-flare", size: "3:2", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
+		{model: "gpt-image-2.5-flare", size: "2:3", wantWidth: 848, wantHeight: 1264, wantLabel: "848x1264"},
+		{model: "gpt-image-2.5-sunburst", size: "3:2", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
+		{model: "gpt-image-2.5-sunburst", size: "2:3", wantWidth: 848, wantHeight: 1264, wantLabel: "848x1264"},
 		{model: "gpt-image-2", size: "1632x2048", wantWidth: 1648, wantHeight: 2048, wantLabel: "1648x2048"},
 		{model: "gpt-image-2", size: "2048x2048", wantWidth: 2048, wantHeight: 2048, wantLabel: "2048x2048"},
 		{model: "gpt-image-2-high", size: "4096x3264", wantWidth: 3200, wantHeight: 2560, wantLabel: "3200x2560"},
@@ -262,8 +270,8 @@ func TestResolveGPTImage1KAlwaysUses1KWithoutChangingGPTImage2(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveImageRequestSizeDetails gpt-image-1k error = %v", err)
 	}
-	if info.Width != 1536 || info.Height != 1024 || info.TierLabel != "1k" || info.RatioLabel != "3:2" {
-		t.Fatalf("gpt-image-1k size = %dx%d tier=%q ratio=%q, want 1536x1024 tier=1k ratio=3:2", info.Width, info.Height, info.TierLabel, info.RatioLabel)
+	if info.Width != 1264 || info.Height != 848 || info.TierLabel != "1k" || info.RatioLabel != "3:2" {
+		t.Fatalf("gpt-image-1k size = %dx%d tier=%q ratio=%q, want 1264x848 tier=1k ratio=3:2", info.Width, info.Height, info.TierLabel, info.RatioLabel)
 	}
 
 	baseInfo, err := s.resolveImageRequestSizeDetails("gpt-image-2", "3000x2000", "")

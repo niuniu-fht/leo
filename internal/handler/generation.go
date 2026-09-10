@@ -37,6 +37,20 @@ type imageModelAlias struct {
 }
 
 var imageModelAliases = map[string]imageModelAlias{
+	"gpt-image-2.5-flare": {
+		PublicID:        "gpt-image-2.5-flare",
+		UpstreamModelID: "135b2740-a20b-48c8-8f86-6f68199e06c5",
+		RequestModel:    "openai/gpt-image-2.5-flare",
+		Quality:         "low",
+		Description:     "Leonardo GPT Image 2.5 Flare image generation",
+	},
+	"gpt-image-2.5-sunburst": {
+		PublicID:        "gpt-image-2.5-sunburst",
+		UpstreamModelID: "135b2740-a20b-48c8-8f86-6f68199e06c5",
+		RequestModel:    "openai/gpt-image-2.5-sunburst",
+		Quality:         "low",
+		Description:     "Leonardo GPT Image 2.5 Sunburst image generation",
+	},
 	"gpt-image-2": {
 		PublicID:        "gpt-image-2",
 		UpstreamModelID: "135b2740-a20b-48c8-8f86-6f68199e06c5",
@@ -149,6 +163,8 @@ func imageCatalogEntry(id, description, quality string, aliases []string) map[st
 }
 
 var openAIModelCatalog = []map[string]interface{}{
+	imageCatalogEntry("gpt-image-2.5-flare", "Leonardo GPT Image 2.5 Flare image generation", "low", nil),
+	imageCatalogEntry("gpt-image-2.5-sunburst", "Leonardo GPT Image 2.5 Sunburst image generation", "low", nil),
 	imageCatalogEntry("gpt-image-2", "Leonardo GPT Image-2 image generation", "low", nil),
 	imageCatalogEntry("gpt-image-1k", "Leonardo GPT Image-2 low quality 1k image generation", "low", nil),
 	imageCatalogEntry("gpt-image-2-high", "Leonardo GPT Image-2 image generation", "medium", nil),
@@ -1908,8 +1924,8 @@ var gptImage2OfficialPresetsByScale = map[int][]gptImagePreset{
 		{Ratio: 9.0 / 21.0, Width: 672, Height: 1584},
 		{Ratio: 16.0 / 9.0, Width: 1376, Height: 768},
 		{Ratio: 9.0 / 16.0, Width: 768, Height: 1376},
-		{Ratio: 3.0 / 2.0, Width: 1536, Height: 1024},
-		{Ratio: 2.0 / 3.0, Width: 1024, Height: 1536},
+		{Ratio: 3.0 / 2.0, Width: 1264, Height: 848},
+		{Ratio: 2.0 / 3.0, Width: 848, Height: 1264},
 		{Ratio: 4.0 / 3.0, Width: 1200, Height: 896},
 		{Ratio: 3.0 / 4.0, Width: 896, Height: 1200},
 		{Ratio: 5.0 / 4.0, Width: 1152, Height: 928},
@@ -2008,7 +2024,7 @@ func imageAliasForModelID(modelID string) (imageModelAlias, bool) {
 
 func imageUsesNativeRequest(modelID string) bool {
 	modelID = strings.ToLower(strings.TrimSpace(modelID))
-	return modelID == "gpt-image-1k" || modelID == "gpt-image-2" || modelID == "gpt-image-2-high" || modelID == "gpt-image-2-higher" || modelID == "gpt-image-2-clarity" || modelID == "bananapro"
+	return modelID == "gpt-image-1k" || strings.HasPrefix(modelID, "gpt-image-2") || modelID == "bananapro"
 }
 
 func imageUsesGeminiImage2Request(publicModelID string, requestModel string) bool {
@@ -2023,6 +2039,11 @@ func imageNativeRequestOptions(publicModelID, requestModel string, hasImageRefer
 	if nativeImageRequest {
 		promptEnhance = "OFF"
 		styleIDs = []string{"556c1ee5-ec38-42e8-955a-1e82dad0ffa1"}
+	}
+	if publicModelID == "gpt-image-2.5-flare" || publicModelID == "gpt-image-2.5-sunburst" {
+		nativeImageRequest = true
+		promptEnhance = "AUTO"
+		styleIDs = []string{"111dc692-d470-4eec-b791-3475abac4c46"}
 	}
 	if imageUsesGeminiImage2Request(publicModelID, requestModel) {
 		nativeImageRequest = true
