@@ -2040,11 +2040,6 @@ func imageNativeRequestOptions(publicModelID, requestModel string, hasImageRefer
 		promptEnhance = "OFF"
 		styleIDs = []string{"556c1ee5-ec38-42e8-955a-1e82dad0ffa1"}
 	}
-	if publicModelID == "gpt-image-2.5-flare" || publicModelID == "gpt-image-2.5-sunburst" {
-		nativeImageRequest = true
-		promptEnhance = "AUTO"
-		styleIDs = []string{"111dc692-d470-4eec-b791-3475abac4c46"}
-	}
 	if imageUsesGeminiImage2Request(publicModelID, requestModel) {
 		nativeImageRequest = true
 		promptEnhance = "OFF"
