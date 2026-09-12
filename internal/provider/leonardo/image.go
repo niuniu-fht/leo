@@ -148,7 +148,15 @@ func (c *Client) GenerateImage(session *TokenSession, imgReq *ImageGenerateReque
 		return nil, fmt.Errorf("parse image generate response: %w", err)
 	}
 	if len(gqlResp.Errors) > 0 {
-		return nil, fmt.Errorf("image generate error: %s", gqlResp.Errors[0].Message)
+		// Leonardo often hides the real cause behind a generic message. Keep the
+		// raw payload as a separate detail on the error (surfaced in the request
+		// log) without polluting Error() — status classification and retry
+		// matching must keep seeing the plain message.
+		log.Printf("[Leonardo] image generate rejected raw response: %.800s", string(body))
+		return nil, &upstreamDetailError{
+			err:    fmt.Errorf("image generate error: %s", gqlResp.Errors[0].Message),
+			detail: fmt.Sprintf("%.400s", string(body)),
+		}
 	}
 	if strings.TrimSpace(gqlResp.Data.Generate.GenerationID) == "" {
 		return nil, fmt.Errorf("image generate failed: empty generation id")
@@ -161,4 +169,19 @@ func (c *Client) GenerateImage(session *TokenSession, imgReq *ImageGenerateReque
 		GenerationID:  gqlResp.Data.Generate.GenerationID,
 		APICreditCost: gqlResp.Data.Generate.APICreditCost,
 	}, nil
+}
+
+// upstreamDetailError carries a provider error together with the raw upstream
+// response body. Error() returns the plain message so status-code classification
+// and retry matching see only the original text; callers that need the raw
+// payload (e.g. request logging) can extract it via Detail().
+type upstreamDetailError struct {
+	err    error
+	detail string
+}
+
+func (e *upstreamDetailError) Error() string { return e.err.Error() }
+func (e *upstreamDetailError) Unwrap() error { return e.err }
+func (e *upstreamDetailError) Detail() string {
+	return strings.TrimSpace(e.detail)
 }

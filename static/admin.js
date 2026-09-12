@@ -61,6 +61,24 @@ document.addEventListener("DOMContentLoaded", async () => {
   const tokenModal = document.getElementById("tokenModal");
   const tokenModalCloseBtn = document.getElementById("tokenModalCloseBtn");
   const openCookieImportBtn = document.getElementById("openCookieImportBtn");
+  // Test Image Generation
+  const openTestImageModalBtn = document.getElementById("openTestImageModalBtn");
+  const testImageModal = document.getElementById("testImageModal");
+  const testImageCloseBtn = document.getElementById("testImageCloseBtn");
+  const testImageModel = document.getElementById("testImageModel");
+  const testImageRatio = document.getElementById("testImageRatio");
+  const testImagePrompt = document.getElementById("testImagePrompt");
+  const testImageRunBtn = document.getElementById("testImageRunBtn");
+  const testImageMsg = document.getElementById("testImageMsg");
+  const testImagePlaceholder = document.getElementById("testImagePlaceholder");
+  const testImageLoading = document.getElementById("testImageLoading");
+  const testImageElapsed = document.getElementById("testImageElapsed");
+  const testImageResult = document.getElementById("testImageResult");
+  const testImageError = document.getElementById("testImageError");
+  const testImageMeta = document.getElementById("testImageMeta");
+  const testImageAccountBadge = document.getElementById("testImageAccountBadge");
+  const testImageAccountName = document.getElementById("testImageAccountName");
+  const testImageAccountClearBtn = document.getElementById("testImageAccountClearBtn");
   const exportTokensBtn = document.getElementById("exportTokensBtn");
   const deleteTokensBatchBtn = document.getElementById("deleteTokensBatchBtn");
   const enableTokensBatchBtn = document.getElementById("enableTokensBatchBtn");
@@ -500,6 +518,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         <div class="action-btns">
           ${refreshTokenBtn}
           ${expiryRefreshTestBtn}
+          <button class="action-mini" onclick="testTokenImage('${t.id}')" title="用该账号测试生图">测试出图</button>
           ${statusBtn}
           <button class="action-mini danger" onclick="deleteToken('${t.id}')">删除Token</button>
         </div>
@@ -666,6 +685,190 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (tokenModal) {
     tokenModal.addEventListener("click", (event) => {
       if (event.target === tokenModal) closeDialog(tokenModal);
+    });
+  }
+
+  // ─── Test Image Generation ───
+  let testImageTimer = null;
+  let testImageForcedToken = null;
+
+  function setTestImageForcedToken(tokenId) {
+    const id = String(tokenId || "").trim();
+    testImageForcedToken = null;
+    if (id) {
+      const token = latestTokens.find((t) => String(t.id) === id);
+      const label = String(token?.account_email || token?.refresh_profile_email || token?.name || id);
+      testImageForcedToken = { id, label };
+    }
+    if (testImageAccountBadge) {
+      testImageAccountBadge.style.display = testImageForcedToken ? "" : "none";
+    }
+    if (testImageAccountName) {
+      testImageAccountName.textContent = testImageForcedToken ? `${testImageForcedToken.label}（token ${testImageForcedToken.id}）` : "";
+    }
+  }
+
+  window.testTokenImage = (tokenId) => {
+    setTestImageForcedToken(tokenId);
+    resetTestImagePanel();
+    openDialog(testImageModal);
+  };
+
+  function resetTestImagePanel() {
+    if (testImageTimer) {
+      clearInterval(testImageTimer);
+      testImageTimer = null;
+    }
+    if (testImageLoading) testImageLoading.style.display = "none";
+    if (testImageResult) {
+      testImageResult.style.display = "none";
+      testImageResult.removeAttribute("src");
+    }
+    if (testImageError) {
+      testImageError.style.display = "none";
+      testImageError.textContent = "";
+    }
+    if (testImageMeta) testImageMeta.textContent = "";
+    if (testImagePlaceholder) testImagePlaceholder.style.display = "";
+  }
+
+  function startTestImageTimer() {
+    if (!testImageElapsed || !testImageLoading) return;
+    const startedAt = Date.now();
+    testImageElapsed.textContent = "0.0";
+    if (testImageTimer) clearInterval(testImageTimer);
+    testImageTimer = setInterval(() => {
+      testImageElapsed.textContent = ((Date.now() - startedAt) / 1000).toFixed(1);
+    }, 100);
+  }
+
+  function stopTestImageTimer() {
+    if (testImageTimer) {
+      clearInterval(testImageTimer);
+      testImageTimer = null;
+    }
+  }
+
+  async function runTestImage() {
+    if (!testImageRunBtn) return;
+    const prompt = (testImagePrompt?.value || "").trim();
+    if (prompt.length < 3) {
+      showMsg(testImageMsg, "请输入至少 3 个字符的提示词", true);
+      return;
+    }
+    const model = testImageModel?.value || "gpt-image-2";
+    const aspectRatio = testImageRatio?.value || "1:1";
+
+    const bodyPayload = { prompt, model, aspect_ratio: aspectRatio };
+    if (testImageForcedToken?.id) bodyPayload.token_id = testImageForcedToken.id;
+
+    testImageRunBtn.disabled = true;
+    showMsg(testImageMsg, testImageForcedToken ? `已提交（指定账号 ${testImageForcedToken.label}）…` : "已提交，等待生成…", false, { duration: 0 });
+    if (testImagePlaceholder) testImagePlaceholder.style.display = "none";
+    if (testImageResult) testImageResult.style.display = "none";
+    if (testImageError) testImageError.style.display = "none";
+    if (testImageMeta) testImageMeta.textContent = "";
+    if (testImageLoading) testImageLoading.style.display = "";
+    startTestImageTimer();
+
+    const startedAt = Date.now();
+    try {
+      const res = await fetch("/api/v1/test-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(bodyPayload)
+      });
+      const data = await res.json().catch(() => null);
+      stopTestImageTimer();
+      if (!res.ok) {
+        const detail = data?.detail || data?.error?.message || `HTTP ${res.status}`;
+        if (testImageLoading) testImageLoading.style.display = "none";
+        if (testImageError) {
+          testImageError.textContent = `生成失败（${((Date.now() - startedAt) / 1000).toFixed(1)}s）：${detail}`;
+          testImageError.style.display = "";
+        }
+        showMsg(testImageMsg, "生成失败", true);
+        return;
+      }
+      const item = data?.data?.[0] || {};
+      const src = item.url
+        ? item.url
+        : item.b64_json
+          ? `data:image/png;base64,${item.b64_json}`
+          : "";
+      if (testImageLoading) testImageLoading.style.display = "none";
+      if (!src) {
+        if (testImageError) {
+          testImageError.textContent = "生成完成，但响应中没有图片地址";
+          testImageError.style.display = "";
+        }
+        showMsg(testImageMsg, "响应异常", true);
+        return;
+      }
+      if (testImageResult) {
+        testImageResult.src = src;
+        testImageResult.style.display = "";
+      }
+      const provider = data?.provider || {};
+      const parts = [];
+      parts.push(`耗时 ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
+      if (testImageForcedToken) parts.push(`账号 ${testImageForcedToken.label}`);
+      if (provider.used_token_id) parts.push(`token ${provider.used_token_id}`);
+      if (provider.model) parts.push(provider.model);
+      if (provider.size) parts.push(provider.size);
+      if (typeof provider.credit_cost === "number") parts.push(`积分 ${provider.credit_cost}`);
+      if (provider.used_token_id) parts.push(`token ${provider.used_token_id}`);
+      if (testImageMeta) testImageMeta.textContent = parts.join(" · ");
+      showMsg(testImageMsg, "生成完成", false);
+    } catch (err) {
+      stopTestImageTimer();
+      if (testImageLoading) testImageLoading.style.display = "none";
+      if (testImageError) {
+        testImageError.textContent = `请求失败：${err.message || err}`;
+        testImageError.style.display = "";
+      }
+      showMsg(testImageMsg, "请求失败", true);
+    } finally {
+      testImageRunBtn.disabled = false;
+    }
+  }
+
+  if (openTestImageModalBtn) {
+    openTestImageModalBtn.addEventListener("click", () => {
+      setTestImageForcedToken(null);
+      resetTestImagePanel();
+      openDialog(testImageModal);
+    });
+  }
+  if (testImageAccountClearBtn) {
+    testImageAccountClearBtn.addEventListener("click", () => {
+      setTestImageForcedToken(null);
+      showMsg(testImageMsg, "已改为随机调度，将自动选择账号", false);
+    });
+  }
+  if (testImageCloseBtn) {
+    testImageCloseBtn.addEventListener("click", () => {
+      closeDialog(testImageModal);
+      resetTestImagePanel();
+    });
+  }
+  if (testImageModal) {
+    testImageModal.addEventListener("click", (event) => {
+      if (event.target === testImageModal) {
+        closeDialog(testImageModal);
+        resetTestImagePanel();
+      }
+    });
+  }
+  if (testImageRunBtn) {
+    testImageRunBtn.addEventListener("click", runTestImage);
+  }
+  if (testImagePrompt) {
+    testImagePrompt.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        runTestImage();
+      }
     });
   }
 

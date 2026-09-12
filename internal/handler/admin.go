@@ -339,6 +339,41 @@ func (s *Server) HandleTokenAdd(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleTestImageGeneration handles POST /api/v1/test-image.
+// Admin-only test entry that reuses the full OpenAI-style image pipeline.
+func (s *Server) HandleTestImageGeneration(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := s.requireAdmin(r); err != nil {
+		writeJSON(w, 401, map[string]string{"detail": "unauthorized"})
+		return
+	}
+	if s.LeonardoClient == nil {
+		writeJSON(w, 500, map[string]string{"detail": "Leonardo client not initialized"})
+		return
+	}
+	var body struct {
+		Prompt      string `json:"prompt"`
+		Model       string `json:"model"`
+		AspectRatio string `json:"aspect_ratio"`
+		TokenID     string `json:"token_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, 400, map[string]string{"detail": "invalid request body"})
+		return
+	}
+	payload := openAIImageGenerationRequest{
+		Prompt:        body.Prompt,
+		Model:         body.Model,
+		N:             1,
+		AspectRatio:   body.AspectRatio,
+		ForcedTokenID: strings.TrimSpace(body.TokenID),
+	}
+	s.handleOpenAIImageRequest(w, r, payload)
+}
+
 // HandleLeonardoValidate handles POST /api/v1/leonardo/validate.
 func (s *Server) HandleLeonardoValidate(w http.ResponseWriter, r *http.Request) {
 	if err := s.requireAdmin(r); err != nil {

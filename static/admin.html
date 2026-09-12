@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Leo2API 控制台</title>
   <link rel="stylesheet" href="/static/vendor/tabler/tabler.min.css" />
-  <link rel="stylesheet" href="/static/admin.css?v=20260815-4" />
+  <link rel="stylesheet" href="/static/admin.css?v=20260912-2" />
 </head>
 <body class="d-flex flex-column min-vh-100">
   <header class="navbar navbar-expand-md navbar-dark d-print-none leo-navbar">
@@ -56,6 +56,7 @@
                   <div class="d-flex flex-wrap gap-2">
                     <button id="openAddTokenModalBtn" class="btn btn-primary">添加 Token</button>
                     <button id="openCookieImportBtn" class="btn btn-outline-secondary">导入 Cookie</button>
+                    <button id="openTestImageModalBtn" class="btn btn-outline-primary">测试出图</button>
                   </div>
                 </div>
                 <div class="token-dashboard-cards" aria-label="Token 积分概览">
@@ -753,6 +754,67 @@
     </div>
   </div>
 
+  <div id="testImageModal" class="dialog-modal" aria-hidden="true">
+    <div class="dialog-card test-image-card" role="dialog" aria-modal="true" aria-label="测试出图">
+      <div class="d-flex align-items-center justify-content-between mb-3">
+        <h2 class="h4 mb-0">测试出图</h2>
+        <button id="testImageCloseBtn" class="btn btn-sm btn-outline-secondary" type="button">关闭</button>
+      </div>
+      <div id="testImageAccountBadge" class="test-image-account-badge" style="display:none;">
+        <span>测试账号：<strong id="testImageAccountName"></strong></span>
+        <button id="testImageAccountClearBtn" class="btn btn-sm btn-outline-secondary" type="button">改为随机调度</button>
+      </div>
+      <div class="test-image-layout">
+        <div class="test-image-left">
+          <div class="form-group mb-2">
+            <label class="form-label" for="testImageModel">模型</label>
+            <select id="testImageModel" class="form-select input-select">
+              <option value="gpt-image-2" selected>gpt-image-2</option>
+              <option value="gpt-image-2-high">gpt-image-2-high</option>
+              <option value="gpt-image-2-higher">gpt-image-2-higher</option>
+              <option value="gpt-image-1k">gpt-image-1k</option>
+              <option value="gpt-image-2.5-flare">gpt-image-2.5-flare</option>
+              <option value="gpt-image-2.5-sunburst">gpt-image-2.5-sunburst</option>
+              <option value="gpt-image-2-clarity">gpt-image-2-clarity</option>
+              <option value="gpt-image-gemini-3.1-flash-image">gpt-image-gemini-3.1-flash-image</option>
+              <option value="gpt-image-gemini-3-pro-image">gpt-image-gemini-3-pro-image</option>
+            </select>
+          </div>
+          <div class="form-group mb-2">
+            <label class="form-label" for="testImageRatio">比例</label>
+            <select id="testImageRatio" class="form-select input-select">
+              <option value="1:1" selected>1:1（方形）</option>
+              <option value="16:9">16:9（横屏）</option>
+              <option value="9:16">9:16（竖屏）</option>
+              <option value="4:3">4:3（横向）</option>
+            </select>
+          </div>
+          <div class="form-group mb-2">
+            <label class="form-label" for="testImagePrompt">提示词</label>
+            <textarea id="testImagePrompt" class="form-control" rows="8" placeholder="输入测试提示词，至少 3 个字符"></textarea>
+          </div>
+          <div class="d-flex align-items-center gap-3">
+            <button id="testImageRunBtn" class="btn btn-primary" type="button">生成</button>
+            <span id="testImageMsg" class="msg"></span>
+          </div>
+        </div>
+        <div class="test-image-right">
+          <div id="testImageCanvas" class="test-image-canvas">
+            <div id="testImagePlaceholder" class="test-image-placeholder">生成结果会显示在这里</div>
+            <div id="testImageLoading" class="test-image-loading" style="display:none;">
+              <div class="test-image-spinner" aria-hidden="true"></div>
+              <div class="test-image-elapsed"><span id="testImageElapsed">0.0</span> s</div>
+              <div class="text-secondary small">正在生成，请稍候…</div>
+            </div>
+            <img id="testImageResult" class="test-image-result" style="display:none;" alt="测试出图结果" />
+            <div id="testImageError" class="test-image-error" style="display:none;"></div>
+          </div>
+          <div id="testImageMeta" class="test-image-meta text-secondary small mt-2"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="cleanupConfirmModal" class="dialog-modal" aria-hidden="true">
     <div class="dialog-card cleanup-confirm-card" role="dialog" aria-modal="true" aria-label="清理 Token">
       <div class="d-flex align-items-center justify-content-between mb-3">
@@ -809,6 +871,6 @@
   <div id="appToast" class="toast leo-toast" role="status" aria-live="polite"></div>
 
   <script src="/static/vendor/tabler/tabler.min.js"></script>
-  <script src="/static/admin.js?v=20260815-4"></script>
+  <script src="/static/admin.js?v=20260912-2"></script>
 </body>
 </html>

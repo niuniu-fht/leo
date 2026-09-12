@@ -500,8 +500,12 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 	}
 	width, height, sizeLabel := sizeInfo.Width, sizeInfo.Height, sizeInfo.Label
 
-	session, usedTokenID, releaseTokenPreparation := s.getLeonardoSessionForModelExcludingWithPreparationLease("", nil, publicModelID, sizeInfo.TierLabel, false)
+	session, usedTokenID, releaseTokenPreparation := s.getLeonardoSessionForModelExcludingWithPreparationLease(payload.ForcedTokenID, nil, publicModelID, sizeInfo.TierLabel, false)
 	if session == nil {
+		if payload.ForcedTokenID != "" {
+			writeJSON(w, 503, errorResp(fmt.Sprintf("specified token %s is not available for this model/size (disabled, exhausted, expired, busy, or insufficient credits)", payload.ForcedTokenID), "server_error"))
+			return
+		}
 		writeJSON(w, 503, errorResp("No tokens available", "server_error"))
 		return
 	}
@@ -569,6 +573,12 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			s.TokenMgr.ReportFail(usedTokenID)
 		}
 		msg := fmt.Sprintf("image generation failed: %v", err)
+		var detailErr interface{ Detail() string }
+		if errors.As(err, &detailErr) {
+			if detail := detailErr.Detail(); detail != "" {
+				msg = fmt.Sprintf("%s (upstream_body: %s)", msg, detail)
+			}
+		}
 		s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, sizeInfo.TierLabel, sizeInfo.RatioLabel, sizeInfo.Transform, imageInputMode, imageOperation, imageReferenceCount, usedTokenID, session, time.Since(startTime).Seconds(), statusCode, msg)
 		writeJSON(w, statusCode, errorResp(publicGenerationErrorMessage(msg, statusCode), generationErrorTypeForStatus(statusCode)))
 		return
@@ -1323,6 +1333,9 @@ type openAIImageGenerationRequest struct {
 	ImageBase64s   []string                    `json:"image_base64s"`
 	Images         []openAIImageReferenceInput `json:"images"`
 	ResponseFormat string                      `json:"response_format"`
+	// ForcedTokenID pins the generation to one token-pool account (admin test
+	// entry only, never set from user JSON). Empty means normal scheduling.
+	ForcedTokenID string `json:"-"`
 }
 
 func parseOpenAIImageEditRequest(r *http.Request) (openAIImageGenerationRequest, error) {

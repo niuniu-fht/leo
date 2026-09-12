@@ -195,6 +195,7 @@ func main() {
 		}
 	})
 	mux.HandleFunc("/api/v1/proxy/test", srv.HandleProxyTest)
+	mux.HandleFunc("/api/v1/test-image", srv.HandleTestImageGeneration)
 
 	// ─── Leonardo API ───
 	mux.HandleFunc("/api/v1/leonardo/validate", srv.HandleLeonardoValidate)

@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/imroc/req/v3"
@@ -158,6 +159,9 @@ type Client struct {
 	uploadProxyMode                 string
 	uploadProxy                     string
 	jwtRefreshMargin                time.Duration
+	// introspectionDisabled caches the (permanent) GraphQL introspection
+	// rejection so failure-reason probing does not retry a doomed query.
+	introspectionDisabled atomic.Bool
 }
 
 // NewClient creates a new Leonardo client.
@@ -1907,10 +1911,15 @@ func (c *Client) GetGenerationFailureReason(session *TokenSession, generationID 
 		log.Printf("[Leonardo] generation moderation failure probe failed for %s: %v", generationID, err)
 	}
 
-	if reason, err := c.queryGenerationFailureReasonByIntrospection(jwt, generationID); err == nil && strings.TrimSpace(reason) != "" {
-		return strings.TrimSpace(reason), nil
-	} else if err != nil {
-		log.Printf("[Leonardo] generation failure introspection probe failed for %s: %v", generationID, err)
+	if !c.introspectionDisabled.Load() {
+		if reason, err := c.queryGenerationFailureReasonByIntrospection(jwt, generationID); err == nil && strings.TrimSpace(reason) != "" {
+			return strings.TrimSpace(reason), nil
+		} else if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "introspection is disabled") {
+				c.introspectionDisabled.Store(true)
+			}
+			log.Printf("[Leonardo] generation failure introspection probe failed for %s: %v", generationID, err)
+		}
 	}
 
 	for _, fieldName := range generationFailureReasonFields {
@@ -2314,7 +2323,12 @@ func isUnknownGraphQLFieldError(err error, fieldName string) bool {
 	if fieldName == "" {
 		return false
 	}
-	return strings.Contains(msg, "cannot query field") && strings.Contains(msg, strings.ToLower(fieldName))
+	// Leonardo phrases unknown fields either as "cannot query field X" or
+	// "field 'X' not found in type: Y" depending on endpoint version.
+	if strings.Contains(msg, "cannot query field") && strings.Contains(msg, strings.ToLower(fieldName)) {
+		return true
+	}
+	return strings.Contains(msg, "not found in type") && strings.Contains(msg, strings.ToLower(fieldName))
 }
 
 func (c *Client) listGenerationFields(jwt string) (map[string]*graphqlTypeRef, error) {
