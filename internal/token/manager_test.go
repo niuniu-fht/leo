@@ -70,6 +70,7 @@ func TestUpsertImportedCookiesSavesOnceAndMarksPending(t *testing.T) {
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
+	m.flush()
 	if store.saves != 1 {
 		t.Fatalf("expected one save for batch import, got %d", store.saves)
 	}

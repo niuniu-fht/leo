@@ -28,6 +28,7 @@ func TestLoadMigratesLegacyRateLimitedAbnormalToken(t *testing.T) {
 	if got, _ := updated["auto_refresh"].(bool); !got {
 		t.Fatal("auto_refresh should be re-enabled")
 	}
+	mgr.flush()
 	if store.saves == 0 {
 		t.Fatal("migration should be persisted")
 	}

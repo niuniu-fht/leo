@@ -75,6 +75,13 @@ type Manager struct {
 	store    store.TokenStore
 	rrIndex  int // legacy round-robin index
 	rrNextID string
+	// dirty-tracking persistence: save() only flags; a background flusher
+	// writes the pool at most once per interval so mutation-heavy workloads
+	// (credit updates, JWT rotations, imports) do not serialize every token
+	// operation behind full-pool JSON roundtrips and sqlite table rewrites.
+	dirty     bool
+	stopFlush chan struct{}
+	flushOnce sync.Once
 }
 
 // NewManager creates a new token manager.
@@ -83,6 +90,7 @@ func NewManager(tokenStore store.TokenStore) *Manager {
 		store: tokenStore,
 	}
 	m.load()
+	m.startFlusher()
 	return m
 }
 
@@ -121,18 +129,55 @@ func (m *Manager) load() {
 	log.Printf("[token_mgr] loaded %d tokens", len(m.tokens))
 }
 
-func (m *Manager) save() {
-	if m.store == nil {
+// tokenPoolFlushInterval bounds how long a mutation can stay unpersisted.
+const tokenPoolFlushInterval = time.Second
+
+// startFlusher launches the background persistence loop (once per Manager).
+func (m *Manager) startFlusher() {
+	m.flushOnce.Do(func() {
+		m.stopFlush = make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(tokenPoolFlushInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					m.flush()
+				case <-m.stopFlush:
+					return
+				}
+			}
+		}()
+	})
+}
+
+// flush persists the pool if dirty. The row snapshot is taken under the lock
+// and written outside it so token operations never wait on disk IO.
+func (m *Manager) flush() {
+	m.mu.Lock()
+	if !m.dirty || m.store == nil {
+		m.mu.Unlock()
 		return
 	}
+	m.dirty = false
 	m.sortByImportOrderLocked()
-	var rows []map[string]interface{}
+	rows := make([]map[string]interface{}, 0, len(m.tokens))
 	for _, t := range m.tokens {
 		rows = append(rows, tokenToMap(t))
 	}
+	m.mu.Unlock()
+
 	if err := m.store.ReplaceTokens(rows); err != nil {
 		log.Printf("[token_mgr] failed to save tokens: %v", err)
 	}
+}
+
+// save marks the pool dirty; the flusher persists it within ~tokenPoolFlushInterval.
+// Previously every mutation rewrote the whole pool here (a JSON roundtrip per
+// token plus a full sqlite table replace) under m.mu, which pegged a CPU core
+// and serialized all token operations on busy servers.
+func (m *Manager) save() {
+	m.dirty = true
 }
 
 func (m *Manager) sortByImportOrderLocked() {
