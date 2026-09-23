@@ -4284,6 +4284,13 @@ func (s *Server) markTokenExhausted(tokenID string, reason string) {
 		log.Printf("[token] failed to mark token exhausted %s: %v", tokenID, err)
 		return
 	}
+	// Record when the token was exhausted so renewal recovery only re-probes
+	// it after the next credit-renewal day; Leonardo's credit API can report
+	// stale balances, so frequent re-probes would just restore a still-broke
+	// account into a fail/mark loop.
+	if err := s.TokenMgr.SetExhaustedAt(tokenID, float64(time.Now().Unix())); err != nil {
+		log.Printf("[token] failed to record exhausted time for %s: %v", tokenID, err)
+	}
 	if err := s.TokenMgr.SetAutoRefresh(tokenID, false); err != nil {
 		log.Printf("[token] failed to disable auto-refresh for exhausted token %s: %v", tokenID, err)
 	}

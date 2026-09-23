@@ -325,11 +325,22 @@ func (s *Server) shouldRunTokenAutoRefresh(item map[string]interface{}, tokenID 
 }
 
 func (s *Server) shouldRunTokenRenewalRecovery(item map[string]interface{}, tokenID string, now time.Time) bool {
-	// Exhausted-token recovery is intentionally time-window based rather than
-	// tokenRenewalDate based: Leonardo's tokenRenewalDate may represent account
-	// or cookie/subscription metadata, so we probe exhausted accounts every 30
-	// minutes and restore only when the refreshed credits cross the configured
-	// exhaustion threshold.
+	// Exhausted-token recovery is day-boundary based: Leonardo renews
+	// subscription credits daily, and its credit API can report stale balances
+	// (an account showing thousands of credits may actually have almost none
+	// left for generation). Probing sooner would just restore a still-broke
+	// account into a fail/mark loop, so an exhausted token is re-probed only
+	// after the first local midnight following its exhaustion timestamp.
+	exhaustedAt := toFloat64(item["exhausted_at"])
+	if exhaustedAt > 0 {
+		marked := time.Unix(int64(exhaustedAt), 0)
+		nextMidnight := time.Date(marked.Year(), marked.Month(), marked.Day(), 0, 0, 0, 0, marked.Location()).AddDate(0, 0, 1)
+		if now.Before(nextMidnight) {
+			return false
+		}
+	}
+	// Tokens exhausted before this field existed have no timestamp: probe them
+	// once (a fresh timestamp will be set if they fail again).
 	s.autoRefreshMu.Lock()
 	defer s.autoRefreshMu.Unlock()
 	if s.autoRefreshRun == nil {
@@ -565,6 +576,11 @@ func (s *Server) restoreTokenAfterSuccessfulRefresh(tokenID string) {
 	if err := s.TokenMgr.SetStatus(tokenID, "active"); err != nil {
 		log.Printf("[token] failed to restore active status after refresh for %s: %v", tokenID, err)
 		return
+	}
+	// The exhaustion window is over; clear the timestamp so a future
+	// exhaustion starts a fresh day-boundary window.
+	if err := s.TokenMgr.SetExhaustedAt(tokenID, 0); err != nil {
+		log.Printf("[token] failed to clear exhausted time for %s: %v", tokenID, err)
 	}
 	info := s.TokenMgr.GetByID(tokenID)
 	if strings.ToLower(strings.TrimSpace(toString(info["platform"]))) != "leonardo" {

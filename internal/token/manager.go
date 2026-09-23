@@ -44,6 +44,7 @@ type Token struct {
 	RefreshProfileID   string  `json:"refresh_profile_id,omitempty"`
 	RefreshProfileName string  `json:"refresh_profile_name,omitempty"`
 	ExpiresAt          float64 `json:"expires_at,omitempty"`
+	ExhaustedAt        float64 `json:"exhausted_at,omitempty"`
 	TokenRenewalDate   string  `json:"token_renewal_date,omitempty"`
 	Credits            float64 `json:"credits,omitempty"`
 	MaxCredits         float64 `json:"max_credits,omitempty"`
@@ -1094,6 +1095,22 @@ func (m *Manager) SetAutoRefresh(tokenID string, enabled bool) error {
 			t.AutoRefresh = enabled
 			m.save()
 			log.Printf("[token_mgr] auto_refresh set to %v for token %s", enabled, tokenID)
+			return nil
+		}
+	}
+	return fmt.Errorf("token not found")
+}
+
+// SetExhaustedAt records (or clears, when at <= 0) when a token was marked
+// exhausted. Renewal recovery waits for the next credit-renewal day after this
+// timestamp instead of probing every sweep.
+func (m *Manager) SetExhaustedAt(tokenID string, at float64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, t := range m.tokens {
+		if t.ID == tokenID {
+			t.ExhaustedAt = at
+			m.save()
 			return nil
 		}
 	}
