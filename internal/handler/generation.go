@@ -51,6 +51,20 @@ var imageModelAliases = map[string]imageModelAlias{
 		Quality:         "low",
 		Description:     "Leonardo GPT Image 2.5 Sunburst image generation",
 	},
+	"gpt-image-2.5-flare-clarity": {
+		PublicID:        "gpt-image-2.5-flare-clarity",
+		UpstreamModelID: "135b2740-a20b-48c8-8f86-6f68199e06c5",
+		RequestModel:    "openai/gpt-image-2.5-flare",
+		Quality:         "low",
+		Description:     "Leonardo GPT Image 2.5 Flare generation + Adobe2API transparent background",
+	},
+	"gpt-image-2.5-sunburst-clarity": {
+		PublicID:        "gpt-image-2.5-sunburst-clarity",
+		UpstreamModelID: "135b2740-a20b-48c8-8f86-6f68199e06c5",
+		RequestModel:    "openai/gpt-image-2.5-sunburst",
+		Quality:         "low",
+		Description:     "Leonardo GPT Image 2.5 Sunburst generation + Adobe2API transparent background",
+	},
 	"gpt-image-2": {
 		PublicID:        "gpt-image-2",
 		UpstreamModelID: "135b2740-a20b-48c8-8f86-6f68199e06c5",
@@ -165,6 +179,8 @@ func imageCatalogEntry(id, description, quality string, aliases []string) map[st
 var openAIModelCatalog = []map[string]interface{}{
 	imageCatalogEntry("gpt-image-2.5-flare", "Leonardo GPT Image 2.5 Flare image generation", "low", nil),
 	imageCatalogEntry("gpt-image-2.5-sunburst", "Leonardo GPT Image 2.5 Sunburst image generation", "low", nil),
+	imageCatalogEntry("gpt-image-2.5-flare-clarity", "Leonardo GPT Image 2.5 Flare generation + Adobe2API transparent background", "low", nil),
+	imageCatalogEntry("gpt-image-2.5-sunburst-clarity", "Leonardo GPT Image 2.5 Sunburst generation + Adobe2API transparent background", "low", nil),
 	imageCatalogEntry("gpt-image-2", "Leonardo GPT Image-2 image generation", "low", nil),
 	imageCatalogEntry("gpt-image-1k", "Leonardo GPT Image-2 low quality 1k image generation", "low", nil),
 	imageCatalogEntry("gpt-image-2-high", "Leonardo GPT Image-2 image generation", "medium", nil),
@@ -2066,7 +2082,11 @@ func imageNativeRequestOptions(publicModelID, requestModel string, hasImageRefer
 }
 
 func imageUsesAdobeClarity(modelID string) bool {
-	return strings.ToLower(strings.TrimSpace(modelID)) == "gpt-image-2-clarity"
+	switch strings.ToLower(strings.TrimSpace(modelID)) {
+	case "gpt-image-2-clarity", "gpt-image-2.5-flare-clarity", "gpt-image-2.5-sunburst-clarity":
+		return true
+	}
+	return false
 }
 
 func imageQualityForModelID(modelID string) (string, bool) {
