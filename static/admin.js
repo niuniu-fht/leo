@@ -260,9 +260,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   function sumTokenCredits(tokens) {
     if (!Array.isArray(tokens)) return 0;
+    // Dashboard totals count only schedulable accounts; exhausted/invalid
+    // tokens often carry stale inflated balances.
     return tokens.reduce((sum, token) => {
       const err = String(token?.credits_error || "").trim();
       if (err) return sum;
+      if (String(token?.status || "").toLowerCase() !== "active") return sum;
       return sum + Math.max(0, parseCreditValue(token?.credits_available ?? token?.credits));
     }, 0);
   }

@@ -145,17 +145,40 @@ func (s *Server) HandleTokenList(w http.ResponseWriter, r *http.Request) {
 
 	// Stats from all tokens
 	stats := s.TokenMgr.Stats()
+	// Credit dashboard counts only tokens the scheduler would actually pick
+	// (same eligibility as the dispatch buckets). Exhausted/invalid/disabled
+	// tokens often carry stale inflated balances, so including them makes the
+	// totals meaningless. 1k/2k estimates additionally require the token to
+	// clear the per-tier credit threshold for gpt-image-2, mirroring
+	// tokenCanRunImageBucketByLocalCredits.
+	dashboardModel := "gpt-image-2"
 	totalCredits := 0.0
+	oneKCredits := 0.0
+	twoKCredits := 0.0
 	for _, t := range allTokens {
 		if rawErr, ok := t["credits_error"]; ok && rawErr != nil && strings.TrimSpace(fmt.Sprintf("%v", rawErr)) != "" {
 			continue
 		}
-		if credits, ok := tokenCreditsAvailable(t); ok && credits > 0 {
-			totalCredits += credits
+		credits, ok := tokenCreditsAvailable(t)
+		if !ok || credits <= 0 {
+			continue
+		}
+		if credits < s.tokenExhaustionCreditThreshold() {
+			continue
+		}
+		if !s.tokenBaseEligibleForDispatchBucket(t) {
+			continue
+		}
+		totalCredits += credits
+		if required, found := s.requiredCreditsForImageRequest(dashboardModel, "1k"); found && credits > required {
+			oneKCredits += credits
+		}
+		if required, found := s.requiredCreditsForImageRequest(dashboardModel, "2k"); found && credits > required {
+			twoKCredits += credits
 		}
 	}
-	oneKCount := int64(totalCredits / 8)
-	twoKCount := int64(totalCredits / 20)
+	oneKCount := int64(oneKCredits / 8)
+	twoKCount := int64(twoKCredits / 20)
 
 	// Pagination
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
