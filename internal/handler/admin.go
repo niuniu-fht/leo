@@ -150,12 +150,14 @@ func (s *Server) HandleTokenList(w http.ResponseWriter, r *http.Request) {
 	// tokens often carry stale inflated balances, so including them makes the
 	// totals meaningless. 1k/2k estimates additionally require the token to
 	// clear the per-tier credit threshold for gpt-image-2, mirroring
-	// tokenCanRunImageBucketByLocalCredits.
+	// tokenCanRunImageBucketByLocalCredits. ListFull is required because the
+	// eligibility check needs fields the masked list summary strips (value).
+	dashboardTokens := s.TokenMgr.ListFull()
 	dashboardModel := "gpt-image-2"
 	totalCredits := 0.0
 	oneKCredits := 0.0
 	twoKCredits := 0.0
-	for _, t := range allTokens {
+	for _, t := range dashboardTokens {
 		if rawErr, ok := t["credits_error"]; ok && rawErr != nil && strings.TrimSpace(fmt.Sprintf("%v", rawErr)) != "" {
 			continue
 		}
