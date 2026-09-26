@@ -2102,11 +2102,32 @@ func (c *Client) queryGenerationNoteFailureCodesObject(jwt string, generationID 
 		for _, note := range gen.Notes {
 			if reason := strings.TrimSpace(note.FailureReason.ErrorCode); reason != "" {
 				errorCodes = appendUniqueString(errorCodes, reason)
+				continue
+			}
+			// Leonardo records some failures only on the note itself with a null
+			// failureReason (e.g. CC_NSFW_TOTAL_FAILURE: the generated image was
+			// flagged by the output-side content check). Fall back to the note
+			// type so callers can classify these as moderation rejections.
+			if code := failureIndicatingNoteType(note.NoteType); code != "" {
+				errorCodes = appendUniqueString(errorCodes, code)
 			}
 		}
 		return errorCodes, nil
 	}
 	return nil, nil
+}
+
+// failureIndicatingNoteType returns the noteType when it carries a failure
+// signal (contains FAILURE or ERROR); empty otherwise.
+func failureIndicatingNoteType(noteType string) string {
+	noteType = strings.ToUpper(strings.TrimSpace(noteType))
+	if noteType == "" {
+		return ""
+	}
+	if strings.Contains(noteType, "FAILURE") || strings.Contains(noteType, "ERROR") {
+		return noteType
+	}
+	return ""
 }
 
 func (c *Client) queryGenerationNoteFailureCodesScalar(jwt string, generationID string) ([]string, error) {
@@ -2166,6 +2187,10 @@ func (c *Client) queryGenerationNoteFailureCodesScalar(jwt string, generationID 
 		for _, note := range gen.Notes {
 			if reason := extractMeaningfulFailureText(note.FailureReason); reason != "" {
 				errorCodes = appendUniqueString(errorCodes, reason)
+				continue
+			}
+			if code := failureIndicatingNoteType(note.NoteType); code != "" {
+				errorCodes = appendUniqueString(errorCodes, code)
 			}
 		}
 		return errorCodes, nil

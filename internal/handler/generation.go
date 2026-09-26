@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"leo2api/internal/config"
 	"leo2api/internal/provider/leonardo"
@@ -491,6 +492,7 @@ func (s *Server) HandleImageEdits(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request, payload openAIImageGenerationRequest) {
 	payload.Prompt = strings.TrimSpace(payload.Prompt)
+	payload.Prompt = truncateImagePromptForUpstream(payload.Prompt)
 	if len(payload.Prompt) < 3 {
 		writeJSON(w, 400, errorResp("prompt must contain at least 3 characters", "invalid_request_error"))
 		return
@@ -727,6 +729,28 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			"postprocess":       postprocess,
 		},
 	})
+}
+
+// Leonardo rejects prompts longer than 9999 characters. The limit counts
+// Unicode characters, not bytes (verified upstream: 9999 CJK characters at
+// 3 UTF-8 bytes each are accepted while 10000 ASCII characters are rejected),
+// so rune-based truncation is correct for mixed Chinese/English prompts.
+const (
+	leonardoPromptCharLimit      = 9999
+	leonardoPromptTruncateTarget = 9500
+)
+
+// truncateImagePromptForUpstream caps the prompt at 9500 characters (safety
+// margin below the 9999 limit) so the generate mutation is never rejected for
+// prompt length.
+func truncateImagePromptForUpstream(prompt string) string {
+	count := utf8.RuneCountInString(prompt)
+	if count <= leonardoPromptTruncateTarget {
+		return prompt
+	}
+	truncated := string([]rune(prompt)[:leonardoPromptTruncateTarget])
+	log.Printf("[image_generation] prompt truncated %d -> %d characters for upstream limit %d", count, leonardoPromptTruncateTarget, leonardoPromptCharLimit)
+	return truncated
 }
 
 func normalizeOpenAIImageResponseFormat(value string) (string, error) {
