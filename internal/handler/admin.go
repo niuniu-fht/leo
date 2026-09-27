@@ -4203,6 +4203,16 @@ func (s *Server) refreshTokenCredits(tokenID string, session *leonardo.TokenSess
 	if tokenID == "" || session == nil || s.LeonardoClient == nil || s.TokenMgr == nil {
 		return
 	}
+	// Run asynchronously: the upstream credits query adds 150ms+ (seconds
+	// under rate limits) to the response when called inline from generation
+	// completion paths, stalling high-concurrency traffic.
+	go s.refreshTokenCreditsSync(tokenID, session)
+}
+
+func (s *Server) refreshTokenCreditsSync(tokenID string, session *leonardo.TokenSession) {
+	if tokenID == "" || session == nil || s.LeonardoClient == nil || s.TokenMgr == nil {
+		return
+	}
 	credits, err := s.LeonardoClient.QueryCredits(session)
 	if err != nil {
 		log.Printf("[poll] failed to refresh credits for token %s: %v", tokenID, err)
@@ -4624,15 +4634,20 @@ func (s *Server) getLeonardoSessionForModelExcludingWithPreparationLease(tokenID
 		return session, usedTokenID, bucketRelease
 	}
 
-	s.tokenSelectionMu.Lock()
-	defer s.tokenSelectionMu.Unlock()
-
 	strategy := "round_robin"
 	if s.Config != nil {
 		strategy = strings.TrimSpace(s.Config.GetString("token_rotation_strategy", "round_robin"))
 	}
 
+	// Snapshot the candidate list under the selection lock, then run session
+	// preparation OUTSIDE it: ensureGenerationJWTUsable performs get-session
+	// network calls (multi-second under upstream rate limits). Preparing
+	// tokens while holding tokenSelectionMu serialized every fallback request
+	// behind the slowest JWT refresh and stalled the whole scheduler under
+	// load. Per-token concurrency is still guarded by reserveTokenPreparation.
+	s.tokenSelectionMu.Lock()
 	candidates := s.generationTokenCandidates(s.TokenMgr.AvailableTokensForPlatform("leonardo", strategy), excluded, modelID, imageSizeTier, videoReferenceMode, strategy)
+	s.tokenSelectionMu.Unlock()
 	for _, info := range candidates {
 		foundID := strings.TrimSpace(toString(info["id"]))
 		if foundID == "" {
@@ -4675,15 +4690,16 @@ func (s *Server) getLeonardoSessionForModelExcluding(tokenID string, excluded ma
 		return s.getLeonardoSessionForModel(tokenID, modelID, "", false)
 	}
 
-	s.tokenSelectionMu.Lock()
-	defer s.tokenSelectionMu.Unlock()
-
 	strategy := "round_robin"
 	if s.Config != nil {
 		strategy = strings.TrimSpace(s.Config.GetString("token_rotation_strategy", "round_robin"))
 	}
 
+	// Snapshot under the lock; JWT refreshes happen outside it (see the
+	// preparation-lease variant for the reasoning).
+	s.tokenSelectionMu.Lock()
 	candidates := s.generationTokenCandidates(s.TokenMgr.AvailableTokensForPlatform("leonardo", strategy), excluded, modelID, "", false, strategy)
+	s.tokenSelectionMu.Unlock()
 	for _, info := range candidates {
 		foundID := strings.TrimSpace(toString(info["id"]))
 		if foundID == "" {

@@ -51,12 +51,23 @@ type Store struct {
 	jsonKey    string
 	stats      map[string]statsCacheEntry
 	maxEntries int
+	// dirty-tracking persistence: save() only flags; a background flusher
+	// snapshots and writes at most once per interval. Every Add/Update used to
+	// marshal the whole entry list and rewrite the multi-megabyte file under
+	// mu, which serialized all request logging (and stalled generations under
+	// high concurrency).
+	dirty     bool
+	stopOnce  sync.Once
+	stopFlush chan struct{}
 }
 
 type statsCacheEntry struct {
 	expiresAt time.Time
 	value     map[string]interface{}
 }
+
+// reqlogFlushInterval bounds how long a log mutation can stay unpersisted.
+const reqlogFlushInterval = time.Second
 
 // NewStore creates a new log store. If filePath is non-empty, loads existing
 // logs from disk and persists all changes automatically.
@@ -72,6 +83,7 @@ func NewStoreWithJSON(filePath string, jsonStore store.JSONStore, jsonKey string
 		jsonStore:  jsonStore,
 		jsonKey:    strings.TrimSpace(jsonKey),
 		maxEntries: 5000,
+		stopFlush:  make(chan struct{}),
 	}
 	if jsonStore != nil && strings.TrimSpace(jsonKey) != "" {
 		s.loadFromJSONStore()
@@ -86,7 +98,62 @@ func NewStoreWithJSON(filePath string, jsonStore store.JSONStore, jsonKey string
 			}
 		}
 	}
+	go s.runFlusher()
 	return s
+}
+
+// runFlusher persists dirty state at most once per reqlogFlushInterval.
+func (s *Store) runFlusher() {
+	ticker := time.NewTicker(reqlogFlushInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			s.Flush()
+		case <-s.stopFlush:
+			s.Flush()
+			return
+		}
+	}
+}
+
+// Flush persists the entries when dirty. The snapshot is taken under the
+// lock; the file/redis writes happen outside it.
+func (s *Store) Flush() {
+	s.mu.Lock()
+	if !s.dirty {
+		s.mu.Unlock()
+		return
+	}
+	s.dirty = false
+	snapshot := s.entries
+	var jsonStore store.JSONStore
+	var jsonKey string
+	if s.jsonStore != nil && s.jsonKey != "" {
+		jsonStore, jsonKey = s.jsonStore, s.jsonKey
+	}
+	var data []byte
+	if s.filePath != "" && snapshot != nil {
+		var err error
+		data, err = json.Marshal(snapshot)
+		if err != nil {
+			log.Printf("[reqlog] failed to marshal logs: %v", err)
+			data = nil
+		}
+	}
+	filePath := s.filePath
+	s.mu.Unlock()
+
+	if jsonStore != nil {
+		if err := jsonStore.SaveJSON(jsonKey, snapshot); err != nil {
+			log.Printf("[reqlog] failed to save %s: %v", jsonKey, err)
+		}
+	}
+	if filePath != "" && data != nil {
+		if err := os.WriteFile(filePath, data, 0644); err != nil {
+			log.Printf("[reqlog] failed to write %s: %v", filePath, err)
+		}
+	}
 }
 
 // loadFromDisk reads saved log entries from the JSON file.
@@ -136,26 +203,14 @@ func (s *Store) loadFromJSONStore() {
 	log.Printf("[reqlog] loaded %d log entries from %s", len(entries), s.jsonKey)
 }
 
-// save persists all entries. Must be called with s.mu held.
+// save invalidates caches, bounds in-memory growth, and marks the store
+// dirty; the background flusher persists within ~1s. Previously every
+// mutation also rewrote the whole multi-megabyte log file here under the
+// store mutex, which serialized request logging under load.
 func (s *Store) save() {
 	s.stats = nil
 	s.pruneLocked()
-	if s.jsonStore != nil && s.jsonKey != "" {
-		if err := s.jsonStore.SaveJSON(s.jsonKey, s.entries); err != nil {
-			log.Printf("[reqlog] failed to save %s: %v", s.jsonKey, err)
-		}
-	}
-	if s.filePath == "" {
-		return
-	}
-	data, err := json.Marshal(s.entries)
-	if err != nil {
-		log.Printf("[reqlog] failed to marshal logs: %v", err)
-		return
-	}
-	if err := os.WriteFile(s.filePath, data, 0644); err != nil {
-		log.Printf("[reqlog] failed to write %s: %v", s.filePath, err)
-	}
+	s.dirty = true
 }
 
 // Add inserts a new log entry at the beginning (newest first).
