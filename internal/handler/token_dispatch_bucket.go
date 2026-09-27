@@ -204,6 +204,32 @@ func (s *Server) coolDownTokenDispatchBucket(tokenID string, d time.Duration) {
 	s.refreshTokenDispatchBucketForToken(tokenID)
 }
 
+// isTokenDispatchCoolingDown reports whether the token is still inside a
+// dispatch cooldown window, so fallback candidate selection can skip it the
+// same way the bucket picker does.
+func (s *Server) isTokenDispatchCoolingDown(tokenID string) bool {
+	tokenID = strings.TrimSpace(tokenID)
+	if s == nil || tokenID == "" {
+		return false
+	}
+	mgr := s.ensureTokenDispatchBuckets()
+	if mgr == nil {
+		return false
+	}
+	now := time.Now()
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	until := mgr.cooldown[tokenID]
+	if until.IsZero() {
+		return false
+	}
+	if !until.After(now) {
+		delete(mgr.cooldown, tokenID)
+		return false
+	}
+	return true
+}
+
 func (s *Server) nextTokenFromDispatchBucket(modelID, imageSizeTier string, excluded map[string]bool) string {
 	bucket := imageCreditThresholdBucket(modelID)
 	tier := strings.ToLower(strings.TrimSpace(imageSizeTier))

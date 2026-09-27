@@ -590,6 +590,12 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 		} else if !isRetryableGenerationError(err) && s.TokenMgr != nil && usedTokenID != "" {
 			s.TokenMgr.ReportFail(usedTokenID)
 		}
+		if isConcurrentLimitError(err) {
+			// The account's concurrency slots for this model are exhausted
+			// (often because the cookie is also used elsewhere). Keep it out
+			// of scheduling briefly instead of burning more rejections.
+			s.coolDownTokenDispatchBucket(usedTokenID, 2*time.Minute)
+		}
 		msg := fmt.Sprintf("image generation failed: %v", err)
 		var detailErr interface{ Detail() string }
 		if errors.As(err, &detailErr) {
@@ -3551,6 +3557,24 @@ func explicitStatusCodeFromGenerationError(err error) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// isConcurrentLimitError reports whether the upstream rejected the submission
+// because the account's concurrency slots for the model are exhausted, e.g.
+// "You have reached the maximum number of concurrent GPT Image 2 requests (0)".
+// Leonardo wraps this behind a generic "An error occurred." GraphQL message,
+// so the marker usually only appears in the captured upstream body detail.
+func isConcurrentLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if strings.Contains(err.Error(), "maximum number of concurrent") {
+		return true
+	}
+	if d, ok := err.(interface{ Detail() string }); ok {
+		return strings.Contains(d.Detail(), "maximum number of concurrent")
+	}
+	return false
 }
 
 func isGenerationSafetyReviewError(msg string) bool {

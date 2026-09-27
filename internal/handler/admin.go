@@ -4538,6 +4538,9 @@ func (s *Server) generationTokenCandidates(candidates []map[string]interface{}, 
 		if foundID == "" || (excluded != nil && excluded[foundID]) {
 			return false
 		}
+		if s.isTokenDispatchCoolingDown(foundID) {
+			return false
+		}
 		if !s.tokenCanAcceptSubmission(foundID) {
 			return false
 		}
