@@ -161,14 +161,19 @@ func (s *Store) Flush() {
 		return
 	}
 	s.dirty = false
-	snapshot := s.entries
+	// Copy the slice header data under the lock but marshal outside it:
+	// serializing ~3000 entries takes tens of milliseconds and would stall
+	// every hot-path Add/Update whenever the flusher runs.
+	snapshot := append([]Entry(nil), s.entries...)
 	var jsonStore store.JSONStore
 	var jsonKey string
 	if s.jsonStore != nil && s.jsonKey != "" {
 		jsonStore, jsonKey = s.jsonStore, s.jsonKey
 	}
+	filePath := s.filePath
+	s.mu.Unlock()
 	var data []byte
-	if s.filePath != "" && snapshot != nil {
+	if filePath != "" && snapshot != nil {
 		var err error
 		data, err = json.Marshal(snapshot)
 		if err != nil {
@@ -176,8 +181,6 @@ func (s *Store) Flush() {
 			data = nil
 		}
 	}
-	filePath := s.filePath
-	s.mu.Unlock()
 
 	if jsonStore != nil {
 		if err := jsonStore.SaveJSON(jsonKey, snapshot); err != nil {
