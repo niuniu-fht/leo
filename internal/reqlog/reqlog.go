@@ -59,6 +59,12 @@ type Store struct {
 	dirty     bool
 	stopOnce  sync.Once
 	stopFlush chan struct{}
+	// running is an O(1) per-token IN_PROGRESS counter. Token scheduling
+	// checks running counts for every candidate on every selection; scanning
+	// the whole entry list under mu for each check serialized submissions
+	// under load.
+	running      map[string]int
+	lastExpireAt time.Time
 }
 
 type statsCacheEntry struct {
@@ -113,6 +119,35 @@ func (s *Store) runFlusher() {
 		case <-s.stopFlush:
 			s.Flush()
 			return
+		}
+	}
+}
+
+// adjustRunningLocked maintains the per-token IN_PROGRESS counter; callers
+// must hold s.mu.
+func (s *Store) adjustRunningLocked(tokenID string, delta int) {
+	tokenID = strings.TrimSpace(tokenID)
+	if tokenID == "" || delta == 0 {
+		return
+	}
+	if s.running == nil {
+		s.running = make(map[string]int)
+	}
+	v := s.running[tokenID] + delta
+	if v <= 0 {
+		delete(s.running, tokenID)
+		return
+	}
+	s.running[tokenID] = v
+}
+
+// rebuildRunningLocked recomputes the per-token running counters from the
+// entry list.
+func (s *Store) rebuildRunningLocked() {
+	s.running = make(map[string]int)
+	for _, e := range s.entries {
+		if normalizeTaskStatus(e.TaskStatus) == "IN_PROGRESS" {
+			s.adjustRunningLocked(e.TokenID, 1)
 		}
 	}
 }
@@ -178,6 +213,7 @@ func (s *Store) loadFromDisk() {
 		}
 	}
 	s.entries = entries
+	s.rebuildRunningLocked()
 	log.Printf("[reqlog] loaded %d log entries from %s", len(entries), s.filePath)
 }
 
@@ -200,6 +236,7 @@ func (s *Store) loadFromJSONStore() {
 		}
 	}
 	s.entries = entries
+	s.rebuildRunningLocked()
 	log.Printf("[reqlog] loaded %d log entries from %s", len(entries), s.jsonKey)
 }
 
@@ -225,6 +262,10 @@ func (s *Store) Add(entry Entry) {
 	entry.DurationSec = normalizeDuration(entry.DurationSec)
 	if entry.ErrorMessage == "" && entry.ErrorCode != "" && !isNumericErrorCode(entry.ErrorCode) {
 		entry.ErrorMessage = entry.ErrorCode
+	}
+
+	if entry.TaskStatus == "IN_PROGRESS" {
+		s.adjustRunningLocked(entry.TokenID, 1)
 	}
 
 	// Prepend
@@ -253,7 +294,11 @@ func (s *Store) UpdateByGenerationID(genID string, taskStatus string, statusCode
 
 	for i := range s.entries {
 		if s.entries[i].GenerationID == genID {
+			prevStatus := normalizeTaskStatus(s.entries[i].TaskStatus)
 			s.entries[i].TaskStatus = normalizeTaskStatus(taskStatus)
+			if prevStatus == "IN_PROGRESS" && s.entries[i].TaskStatus != "IN_PROGRESS" {
+				s.adjustRunningLocked(s.entries[i].TokenID, -1)
+			}
 			if statusCode > 0 {
 				s.entries[i].StatusCode = statusCode
 				if statusCode >= 400 {
@@ -314,7 +359,11 @@ func (s *Store) UpdateByGenerationIDIfUpstream(genID string, expectedUpstreamGen
 			return false
 		}
 
+		prevStatus := normalizeTaskStatus(s.entries[i].TaskStatus)
 		s.entries[i].TaskStatus = normalizeTaskStatus(taskStatus)
+		if prevStatus == "IN_PROGRESS" && s.entries[i].TaskStatus != "IN_PROGRESS" {
+			s.adjustRunningLocked(s.entries[i].TokenID, -1)
+		}
 		if statusCode > 0 {
 			s.entries[i].StatusCode = statusCode
 			if statusCode >= 400 {
@@ -353,6 +402,9 @@ func (s *Store) UpdateRetryByGenerationID(genID string, upstreamGenerationID str
 		s.entries[i].UpstreamGenerationID = strings.TrimSpace(upstreamGenerationID)
 		if tokenAttempt > 0 {
 			s.entries[i].TokenAttempt = tokenAttempt
+		}
+		if normalizeTaskStatus(s.entries[i].TaskStatus) != "IN_PROGRESS" {
+			s.adjustRunningLocked(s.entries[i].TokenID, 1)
 		}
 		s.entries[i].TaskStatus = "IN_PROGRESS"
 		s.entries[i].StatusCode = 200
@@ -475,20 +527,17 @@ func (s *Store) RunningCountByToken(tokenID string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	count := 0
-	for _, e := range s.entries {
-		if normalizeTaskStatus(e.TaskStatus) != "IN_PROGRESS" {
-			continue
-		}
-		if strings.TrimSpace(e.TokenID) != tokenID {
-			continue
-		}
-		count++
+	if s.running == nil {
+		return 0
 	}
-	return count
+	return s.running[strings.TrimSpace(tokenID)]
 }
 
+
 // ExpireStaleRunning marks long-running IN_PROGRESS entries as FAILED/504.
+// The scan is throttled: token scheduling calls this on every availability
+// check, so an unthrottled full-list scan per candidate serialized
+// submissions under load.
 func (s *Store) ExpireStaleRunning(timeout time.Duration, now time.Time) int {
 	if timeout <= 0 {
 		return 0
@@ -498,6 +547,11 @@ func (s *Store) ExpireStaleRunning(timeout time.Duration, now time.Time) int {
 	}
 
 	s.mu.Lock()
+	if !s.lastExpireAt.IsZero() && now.Sub(s.lastExpireAt) < 5*time.Second {
+		s.mu.Unlock()
+		return 0
+	}
+	s.lastExpireAt = now
 	defer s.mu.Unlock()
 
 	updated := 0
@@ -515,6 +569,7 @@ func (s *Store) ExpireStaleRunning(timeout time.Duration, now time.Time) int {
 			continue
 		}
 
+		s.adjustRunningLocked(s.entries[i].TokenID, -1)
 		s.entries[i].TaskStatus = "FAILED"
 		s.entries[i].StatusCode = httpStatusGatewayTimeout
 		s.entries[i].ErrorCode = strconv.Itoa(httpStatusGatewayTimeout)
@@ -607,6 +662,7 @@ func (s *Store) Clear() int {
 
 	n := len(s.entries)
 	s.entries = s.entries[:0]
+	s.running = make(map[string]int)
 	s.save()
 	return n
 }
@@ -634,6 +690,11 @@ func (s *Store) pruneLocked() {
 	s.maxEntries = limit
 	if len(s.entries) <= limit {
 		return
+	}
+	for _, e := range s.entries[limit:] {
+		if normalizeTaskStatus(e.TaskStatus) == "IN_PROGRESS" {
+			s.adjustRunningLocked(e.TokenID, -1)
+		}
 	}
 	s.entries = s.entries[:limit]
 }

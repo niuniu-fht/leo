@@ -123,3 +123,25 @@ func TestAddHonorsMaxEntries(t *testing.T) {
 		t.Fatalf("expected newest entries to remain, got %+v", store.entries)
 	}
 }
+
+func TestRunningCountByTokenIndex(t *testing.T) {
+	store := &Store{maxEntries: 5000}
+	store.Add(Entry{ID: "a1", TokenID: "tok-a", TaskStatus: "IN_PROGRESS"})
+	store.Add(Entry{ID: "a2", TokenID: "tok-a", TaskStatus: "IN_PROGRESS"})
+	store.Add(Entry{ID: "a3", TokenID: "tok-b", TaskStatus: "IN_PROGRESS"})
+	if got := store.RunningCountByToken("tok-a"); got != 2 {
+		t.Fatalf("tok-a running = %d, want 2", got)
+	}
+	store.UpdateByGenerationID("", "COMPLETE", 200, "http://x", "image", "")
+	// no generation id set on these; use a proper one
+	store.Add(Entry{ID: "a4", TokenID: "tok-a", TaskStatus: "IN_PROGRESS", GenerationID: "gen-1"})
+	if got := store.RunningCountByToken("tok-a"); got != 3 {
+		t.Fatalf("tok-a running = %d, want 3", got)
+	}
+	if !store.UpdateByGenerationID("gen-1", "COMPLETE", 200, "http://x", "image", "") {
+		t.Fatal("update failed")
+	}
+	if got := store.RunningCountByToken("tok-a"); got != 2 {
+		t.Fatalf("after complete tok-a running = %d, want 2", got)
+	}
+}
