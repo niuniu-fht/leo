@@ -84,23 +84,30 @@ func TestUserBlockedMarksAbnormal(t *testing.T) {
 	}
 }
 
-func TestIsUserBlockedError(t *testing.T) {
-	if isUserBlockedError(nil) {
+func TestIsAccountBannedError(t *testing.T) {
+	if isAccountBannedError(nil) {
 		t.Fatal("nil must not match")
 	}
-	direct := &upstreamDetailErrStub{msg: "image generate error: User is blocked", detail: ""}
-	if !isUserBlockedError(direct) {
-		t.Fatal("message must match")
+	blocked := &upstreamDetailErrStub{msg: "image generate error: User is blocked", detail: ""}
+	if !isAccountBannedError(blocked) {
+		t.Fatal("blocked message must match")
+	}
+	suspended := &upstreamDetailErrStub{msg: "upload init failed: upload init error: You are suspended for violating our user agreement.", detail: ""}
+	if !isAccountBannedError(suspended) {
+		t.Fatal("suspension message must match")
 	}
 	inBody := &upstreamDetailErrStub{
 		msg:    "image generate error: An error occurred.",
 		detail: `{"errors":[{"extensions":{"code":"BadRequestException","details":{"errors":[{"message":"User is blocked"}]}}}]}`,
 	}
-	if !isUserBlockedError(inBody) {
+	if !isAccountBannedError(inBody) {
 		t.Fatal("upstream detail must match")
 	}
 	plain := &upstreamDetailErrStub{msg: "image generate error: An error occurred.", detail: ""}
-	if isUserBlockedError(plain) {
+	if isAccountBannedError(plain) {
 		t.Fatal("plain error must not match")
+	}
+	if code, ok := explicitStatusCodeFromGenerationError(errString("image generate error: You are suspended for violating our user agreement.")); !ok || code != 502 {
+		t.Fatalf("banned error should map to 502, got %d ok=%v", code, ok)
 	}
 }

@@ -554,6 +554,16 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 	for idx, refURL := range refURLs {
 		imageID, err := s.resolveLeonardoImageID(session, "", refURL, uploadCache)
 		if err != nil {
+			if isAccountBannedError(err) {
+				// "You are suspended for violating our user agreement" — the
+				// account is banned upstream. Mark it abnormal and answer 502
+				// so downstream gateways can retry on another account.
+				s.markTokenBlocked(usedTokenID)
+				msg := fmt.Sprintf("image generation failed: account banned upstream: %v", err)
+				s.logImageRequestFailure(payload.Prompt, publicModelID, quality, sizeLabel, sizeInfo.TierLabel, sizeInfo.RatioLabel, sizeInfo.Transform, imageInputMode, imageOperation, imageReferenceCount, usedTokenID, session, time.Since(startTime).Seconds(), 502, msg)
+				writeJSON(w, 502, errorResp(publicGenerationErrorMessage(msg, 502), "server_error"))
+				return
+			}
 			msg := fmt.Sprintf("invalid image_urls[%d]: %v", idx, err)
 			if payload.ImageURL != "" && idx == 0 {
 				msg = fmt.Sprintf("invalid image_url: %v", err)
@@ -600,7 +610,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			s.coolDownTokenDispatchBucket(usedTokenID, 2*time.Minute)
 			s.recordTokenConcurrentLimitHit(usedTokenID)
 		}
-		if isUserBlockedError(err) {
+		if isAccountBannedError(err) {
 			// "User is blocked" is a permanent upstream ban: the account can
 			// still log in and report credits, so nothing else will flag it.
 			// Mark it abnormal (matches the one-click abnormal cleanup) and
@@ -3550,6 +3560,14 @@ func explicitStatusCodeFromGenerationError(err error) (int, bool) {
 		return 0, false
 	}
 	msg := strings.ToLower(err.Error())
+	// Banned accounts ("user is blocked" / "suspended for violating our user
+	// agreement") must surface as 502 so downstream gateways fail over to
+	// another account instead of treating it as a client error.
+	if strings.Contains(msg, "user is blocked") ||
+		strings.Contains(msg, "you are suspended") ||
+		strings.Contains(msg, "suspended for violating") {
+		return http.StatusBadGateway, true
+	}
 	if isGenerationSafetyReviewError(msg) {
 		return http.StatusBadRequest, true
 	}
@@ -3589,18 +3607,26 @@ func isConcurrentLimitError(err error) bool {
 	return false
 }
 
-// isUserBlockedError reports whether the upstream rejected the submission
-// because the account is banned ("User is blocked"). The text appears in the
-// GraphQL message or only inside the captured upstream body detail.
-func isUserBlockedError(err error) bool {
+// isAccountBannedError reports whether the upstream rejected the request
+// because the account is banned, either as "User is blocked" (generate
+// mutation) or "You are suspended for violating our user agreement" (upload
+// init). The text appears in the GraphQL message or only inside the captured
+// upstream body detail.
+func isAccountBannedError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if strings.Contains(strings.ToLower(err.Error()), "user is blocked") {
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "user is blocked") ||
+		strings.Contains(msg, "you are suspended") ||
+		strings.Contains(msg, "suspended for violating") {
 		return true
 	}
 	if d, ok := err.(interface{ Detail() string }); ok {
-		return strings.Contains(strings.ToLower(d.Detail()), "user is blocked")
+		detail := strings.ToLower(d.Detail())
+		return strings.Contains(detail, "user is blocked") ||
+			strings.Contains(detail, "you are suspended") ||
+			strings.Contains(detail, "suspended for violating")
 	}
 	return false
 }
