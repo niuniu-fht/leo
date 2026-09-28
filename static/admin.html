@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Leo2API 控制台</title>
   <link rel="stylesheet" href="/static/vendor/tabler/tabler.min.css" />
-  <link rel="stylesheet" href="/static/admin.css?v=20260913-2" />
+  <link rel="stylesheet" href="/static/admin.css?v=20260928-1" />
 </head>
 <body class="d-flex flex-column min-vh-100">
   <header class="navbar navbar-expand-md navbar-dark d-print-none leo-navbar">
@@ -111,6 +111,7 @@
                   <option value="">全部状态</option>
                   <option value="active">生效中</option>
                   <option value="temporary_unavailable">临时不可用</option>
+                <option value="rate_limited">限流异常</option>
                   <option value="disabled">已禁用</option>
                   <option value="exhausted">额度耗尽</option>
                   <option value="invalid">已失效</option>
@@ -873,6 +874,6 @@
   <div id="appToast" class="toast leo-toast" role="status" aria-live="polite"></div>
 
   <script src="/static/vendor/tabler/tabler.min.js"></script>
-  <script src="/static/admin.js?v=20260913-2"></script>
+  <script src="/static/admin.js?v=20260928-1"></script>
 </body>
 </html>

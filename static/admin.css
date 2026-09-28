@@ -158,6 +158,7 @@ body {
 .status-pending { background: rgba(51, 161, 255, 0.14); color: #7cc0ff; border-color: rgba(51, 161, 255, 0.35); }
 .status-temporary_unavailable { background: rgba(240, 192, 64, 0.12); color: #ffca58; border-color: rgba(240, 192, 64, 0.3); }
 .status-reserved { background: rgba(51, 161, 255, 0.14); color: #7cc0ff; border-color: rgba(51, 161, 255, 0.35); }
+.status-rate_limited { background: rgba(240, 120, 64, 0.14); color: #ff9e64; border-color: rgba(240, 120, 64, 0.35); }
 .status-succeeded { background: rgba(44, 199, 170, 0.14); color: #4de2c4; border-color: rgba(44, 199, 170, 0.35); }
 
 /* ── Token row controls ─────────────────── */

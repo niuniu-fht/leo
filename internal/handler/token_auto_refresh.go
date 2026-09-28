@@ -568,9 +568,12 @@ func (s *Server) restoreTokenAfterSuccessfulRefresh(tokenID string) {
 	currentStatus := strings.ToLower(strings.TrimSpace(toString(cur["status"])))
 	// Reserved (protected) tokens stay reserved after a successful refresh —
 	// they are excluded from task scheduling but must keep their JWT fresh.
+	// rate_limited tokens (stuck upstream concurrency quota) stay marked until
+	// manually re-enabled; the refresh only keeps their JWT/credits current
+	// so a manual test works immediately.
 	// temporary_unavailable keeps its native semantics: rate-limited tokens
 	// recover to active once a refresh succeeds.
-	if currentStatus == token.StatusReserved {
+	if currentStatus == token.StatusReserved || currentStatus == token.StatusRateLimited {
 		return
 	}
 	if err := s.TokenMgr.SetStatus(tokenID, "active"); err != nil {

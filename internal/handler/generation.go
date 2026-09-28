@@ -344,6 +344,8 @@ type Server struct {
 	tokenBucketLoopMu       sync.Mutex
 	tokenBucketLoopStarted  bool
 	tokenBuckets            *tokenDispatchBuckets
+	concurrentLimitMu       sync.Mutex
+	concurrentLimitHits     map[string][]time.Time
 }
 
 type generationRetryPolicy struct {
@@ -591,10 +593,12 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			s.TokenMgr.ReportFail(usedTokenID)
 		}
 		if isConcurrentLimitError(err) {
-			// The account's concurrency slots for this model are exhausted
-			// (often because the cookie is also used elsewhere). Keep it out
-			// of scheduling briefly instead of burning more rejections.
+			// The account's concurrency slots are exhausted upstream (Leonardo
+			// keeps a short sliding window, and some accounts get stuck at (0)
+			// server-side). Back it off briefly and count the hit; accounts
+			// that keep hitting the limit get marked rate_limited.
 			s.coolDownTokenDispatchBucket(usedTokenID, 2*time.Minute)
+			s.recordTokenConcurrentLimitHit(usedTokenID)
 		}
 		msg := fmt.Sprintf("image generation failed: %v", err)
 		var detailErr interface{ Detail() string }
@@ -608,6 +612,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.applyTokenCreditCost(usedTokenID, result.APICreditCost)
+	s.resetTokenConcurrentLimitHits(usedTokenID)
 	accountName, accountEmail := s.resolveReqLogAccount(usedTokenID, session)
 	if s.ReqLog != nil {
 		s.ReqLog.Add(reqlog.Entry{

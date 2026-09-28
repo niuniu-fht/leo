@@ -17,6 +17,7 @@ import (
 
 const StatusTemporaryUnavailable = "temporary_unavailable"
 const StatusReserved = "reserved"
+const StatusRateLimited = "rate_limited"
 
 // Token represents a single account token in the pool.
 type Token struct {

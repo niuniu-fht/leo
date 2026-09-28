@@ -153,6 +153,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const STATUS_MAP = {
     "active": "生效中",
     "temporary_unavailable": "临时不可用",
+    "rate_limited": "限流异常",
     "pending": "待刷新",
     "exhausted": "额度耗尽",
     "invalid": "已失效",
