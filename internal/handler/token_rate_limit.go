@@ -80,3 +80,31 @@ func (s *Server) resetTokenConcurrentLimitHits(tokenID string) {
 	delete(s.concurrentLimitHits, tokenID)
 	s.concurrentLimitMu.Unlock()
 }
+
+// markTokenBlocked permanently benches a token whose account Leonardo banned
+// ("User is blocked"). The status matches the existing abnormal bucket so the
+// admin one-click abnormal cleanup removes these accounts; auto-refresh is
+// disabled so the sweeper stops touching them.
+func (s *Server) markTokenBlocked(tokenID string) {
+	tokenID = strings.TrimSpace(tokenID)
+	if s == nil || tokenID == "" || s.TokenMgr == nil {
+		return
+	}
+	info := s.TokenMgr.GetByID(tokenID)
+	if info == nil {
+		return
+	}
+	status := strings.ToLower(strings.TrimSpace(toString(info["status"])))
+	if status != "active" && status != token.StatusTemporaryUnavailable && status != token.StatusRateLimited && status != "pending" {
+		return
+	}
+	if err := s.TokenMgr.SetStatus(tokenID, "abnormal"); err != nil {
+		log.Printf("[token] failed to mark blocked token %s abnormal: %v", tokenID, err)
+		return
+	}
+	if err := s.TokenMgr.SetAutoRefresh(tokenID, false); err != nil {
+		log.Printf("[token] failed to disable auto-refresh for blocked token %s: %v", tokenID, err)
+	}
+	s.refreshTokenDispatchBucketForToken(tokenID)
+	log.Printf("[token] marked token %s abnormal: upstream reported user is blocked (permanent, cleanup-ready)", tokenID)
+}

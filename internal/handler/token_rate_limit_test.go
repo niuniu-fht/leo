@@ -69,3 +69,38 @@ func TestRateLimitedExcludedFromScheduling(t *testing.T) {
 		}
 	}
 }
+
+func TestUserBlockedMarksAbnormal(t *testing.T) {
+	s := &Server{TokenMgr: token.NewManager(nil)}
+	info, _, _ := s.TokenMgr.Add("cookie-b", "leonardo", "session_token", "acct", "blocked@test.com", "test")
+	id, _ := info["id"].(string)
+	s.markTokenBlocked(id)
+	got := toString(s.TokenMgr.GetByID(id)["status"])
+	if got != "abnormal" {
+		t.Fatalf("blocked token should be abnormal, got %q", got)
+	}
+	if enabled, _ := s.TokenMgr.GetByID(id)["auto_refresh"].(bool); enabled {
+		t.Fatal("blocked token auto-refresh should be disabled")
+	}
+}
+
+func TestIsUserBlockedError(t *testing.T) {
+	if isUserBlockedError(nil) {
+		t.Fatal("nil must not match")
+	}
+	direct := &upstreamDetailErrStub{msg: "image generate error: User is blocked", detail: ""}
+	if !isUserBlockedError(direct) {
+		t.Fatal("message must match")
+	}
+	inBody := &upstreamDetailErrStub{
+		msg:    "image generate error: An error occurred.",
+		detail: `{"errors":[{"extensions":{"code":"BadRequestException","details":{"errors":[{"message":"User is blocked"}]}}}]}`,
+	}
+	if !isUserBlockedError(inBody) {
+		t.Fatal("upstream detail must match")
+	}
+	plain := &upstreamDetailErrStub{msg: "image generate error: An error occurred.", detail: ""}
+	if isUserBlockedError(plain) {
+		t.Fatal("plain error must not match")
+	}
+}

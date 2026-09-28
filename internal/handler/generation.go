@@ -600,6 +600,13 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 			s.coolDownTokenDispatchBucket(usedTokenID, 2*time.Minute)
 			s.recordTokenConcurrentLimitHit(usedTokenID)
 		}
+		if isUserBlockedError(err) {
+			// "User is blocked" is a permanent upstream ban: the account can
+			// still log in and report credits, so nothing else will flag it.
+			// Mark it abnormal (matches the one-click abnormal cleanup) and
+			// stop auto-refreshing it.
+			s.markTokenBlocked(usedTokenID)
+		}
 		msg := fmt.Sprintf("image generation failed: %v", err)
 		var detailErr interface{ Detail() string }
 		if errors.As(err, &detailErr) {
@@ -3578,6 +3585,22 @@ func isConcurrentLimitError(err error) bool {
 	}
 	if d, ok := err.(interface{ Detail() string }); ok {
 		return strings.Contains(d.Detail(), "maximum number of concurrent")
+	}
+	return false
+}
+
+// isUserBlockedError reports whether the upstream rejected the submission
+// because the account is banned ("User is blocked"). The text appears in the
+// GraphQL message or only inside the captured upstream body detail.
+func isUserBlockedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "user is blocked") {
+		return true
+	}
+	if d, ok := err.(interface{ Detail() string }); ok {
+		return strings.Contains(strings.ToLower(d.Detail()), "user is blocked")
 	}
 	return false
 }
