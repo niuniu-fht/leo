@@ -4749,7 +4749,7 @@ func (s *Server) generationTokenCandidates(candidates []map[string]interface{}, 
 	if strings.EqualFold(strings.TrimSpace(strategy), "round_robin_from_start") {
 		out := make([]map[string]interface{}, 0, len(candidates))
 		for _, info := range candidates {
-			if generationJWTWindowPriority(info) > 1 || !isEligible(info) {
+			if (generationJWTWindowPriority(info) > 1 && !s.proxyGeneratorActive()) || !isEligible(info) {
 				continue
 			}
 			out = append(out, info)
@@ -4926,11 +4926,16 @@ func (s *Server) getLeonardoSessionForModel(tokenID string, modelID string, imag
 		if !s.tokenCanAcceptMoreRunningTasks(tokenID) {
 			return nil, ""
 		}
-		if isExpiredTokenInfo(info) {
-			return nil, ""
-		}
-		if generationJWTWindowPriority(info) > 1 {
-			return nil, ""
+		// With the residential generator active the background refresh sweep
+		// is paused, so stored expires_at goes stale. Dispatch must not be
+		// blocked on it: ensureGenerationJWTUsable below refreshes on demand.
+		if !s.proxyGeneratorActive() {
+			if isExpiredTokenInfo(info) {
+				return nil, ""
+			}
+			if generationJWTWindowPriority(info) > 1 {
+				return nil, ""
+			}
 		}
 		if !s.tokenCanRunModelByCredits(info, modelID, imageSizeTier, videoReferenceMode) {
 			return nil, ""

@@ -291,7 +291,9 @@ func (s *Server) tokenBaseEligibleForDispatchBucket(info map[string]interface{})
 	if !strings.EqualFold(strings.TrimSpace(toString(info["status"])), "active") {
 		return false
 	}
-	if isExpiredTokenInfo(info) || generationJWTWindowPriority(info) > 1 {
+	// Generator mode pauses background refresh, so stale expires_at must not
+	// evict tokens from dispatch buckets (JWT is prepared on demand).
+	if (isExpiredTokenInfo(info) || generationJWTWindowPriority(info) > 1) && !s.proxyGeneratorActive() {
 		return false
 	}
 	if strings.TrimSpace(toString(info["value"])) == "" {
