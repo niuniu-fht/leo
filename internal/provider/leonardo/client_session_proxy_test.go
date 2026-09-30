@@ -1,6 +1,7 @@
 package leonardo
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -71,5 +72,28 @@ func TestSessionProxyOverrideStableAndDistinct(t *testing.T) {
 	}
 	if !strings.Contains(a.ProxyOverride, "127.0.0.1:1") {
 		t.Fatalf("override should be stored verbatim: %q", a.ProxyOverride)
+	}
+}
+
+func TestIsProxyRateLimitedError(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want bool
+	}{
+		{`Get "https://app.leonardo.ai/api/auth/get-session": Too Many Requests`, true},
+		{"proxyconnect tcp: dial tcp 127.0.0.1:7890: connection refused", false},
+		{"graphql returned 429: {\"code\":\"challenge\"}", false},
+		{"graphql returned 500: Too Many Requests in body", false},
+		{"read tcp 1.2.3.4:1->5.6.7.8:2: wsarecv: connection reset", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		var err error
+		if tc.msg != "" {
+			err = errors.New(tc.msg)
+		}
+		if got := isProxyRateLimitedError(err); got != tc.want {
+			t.Errorf("isProxyRateLimitedError(%q) = %v, want %v", tc.msg, got, tc.want)
+		}
 	}
 }

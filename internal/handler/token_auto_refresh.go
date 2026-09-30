@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"leo2api/internal/proxygen"
 	"leo2api/internal/token"
 )
 
@@ -69,6 +70,7 @@ func (s *Server) runTokenAutoRefreshSweep() {
 	threshold := s.tokenAutoRefreshThreshold()
 	maxConcurrency := s.tokenAutoRefreshMaxConcurrency()
 	now := time.Now()
+	proxyGated := 0
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, maxConcurrency)
 
@@ -101,6 +103,14 @@ func (s *Server) runTokenAutoRefreshSweep() {
 			continue
 		}
 
+		// Residential generator active: proxied idle accounts are not
+		// refreshed in the background (JWT/credits refresh on demand at
+		// dispatch time), so the gateway quota is reserved for real traffic.
+		if s.proxyGeneratorActive() {
+			proxyGated++
+			continue
+		}
+
 		if !s.shouldRunTokenAutoRefresh(item, tokenID, now, threshold) {
 			continue
 		}
@@ -113,6 +123,21 @@ func (s *Server) runTokenAutoRefreshSweep() {
 		}(tokenID)
 	}
 	wg.Wait()
+	if proxyGated > 0 {
+		log.Printf("[token] auto-refresh skipped %d proxied token(s): residential generator active, JWT/credits refresh on demand", proxyGated)
+	}
+}
+
+// proxyGeneratorActive reports whether Leonardo traffic currently routes
+// through the residential proxy generator.
+func (s *Server) proxyGeneratorActive() bool {
+	if s == nil || s.Config == nil {
+		return false
+	}
+	if !s.Config.GetBool("proxy_gen_enabled", false) {
+		return false
+	}
+	return proxygen.SettingsFromConfig(s.Config).Enabled()
 }
 
 func (s *Server) triggerTokenAutoRefresh(tokenID string) {

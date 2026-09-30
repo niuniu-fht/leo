@@ -955,8 +955,8 @@ func (c *Client) doSessionRefreshAttempt(session *TokenSession, cookieStr string
 	usingProxy := c != nil && (strings.TrimSpace(c.proxy) != "" || c.sessionHasProxy(session))
 	if c != nil && impersonator != nil && c.httpClient == c.defaultHTTPClient {
 		result, err := doSessionRefreshAttemptWithReqClient(impersonator, cookieStr, headers)
-		if err != nil && usingProxy && isProxyConnectionError(err) && c.directSessionImpersonatorClient != nil {
-			log.Printf("[Leonardo] get-session proxy path failed, retrying direct: %v", err)
+		if err != nil && usingProxy && (isProxyConnectionError(err) || isProxyRateLimitedError(err)) && c.directSessionImpersonatorClient != nil {
+			log.Printf("[Leonardo] get-session proxy path failed (connection/rate-limit), retrying direct: %v", err)
 			return doSessionRefreshAttemptWithReqClient(c.directSessionImpersonatorClient, cookieStr, headers)
 		}
 		return result, err
@@ -1533,11 +1533,23 @@ func (c *Client) doGraphQL(session *TokenSession, jwt string, gqlReq graphqlRequ
 	if session != nil && c.sessionHasProxy(session) {
 		usingProxy = true
 	}
-	if err != nil && c != nil && c.directHTTPClient != nil && usingProxy && isProxyConnectionError(err) {
-		log.Printf("[Leonardo] GraphQL proxy path failed, retrying direct: %v", err)
+	if err != nil && c != nil && c.directHTTPClient != nil && usingProxy && (isProxyConnectionError(err) || isProxyRateLimitedError(err)) {
+		log.Printf("[Leonardo] GraphQL proxy path failed (connection/rate-limit), retrying direct: %v", err)
 		return c.doGraphQLWithClient(c.directHTTPClient, jwt, gqlReq)
 	}
 	return body, err
+}
+
+// isProxyRateLimitedError matches the bare transport error produced when the
+// proxy gateway rejects the CONNECT tunnel with 429 ("Too Many Requests").
+// Upstream GraphQL 429s surface as "graphql returned 429: ..." and must NOT
+// match, otherwise Leonardo-side throttling would trigger direct fallback.
+func isProxyRateLimitedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "too many requests") && !strings.Contains(msg, "graphql returned")
 }
 
 func isProxyConnectionError(err error) bool {
