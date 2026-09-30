@@ -128,7 +128,7 @@ func (c *Client) GenerateImage(session *TokenSession, imgReq *ImageGenerateReque
 		Query: generateMutation,
 	}
 
-	body, err := c.doGraphQL(jwt, gqlReq)
+	body, err := c.doGraphQL(session, jwt, gqlReq)
 	if err != nil {
 		return nil, err
 	}

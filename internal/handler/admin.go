@@ -22,6 +22,7 @@ import (
 
 	"leo2api/internal/provider/leonardo"
 	"leo2api/internal/proxyfmt"
+	"leo2api/internal/proxygen"
 	"leo2api/internal/reqlog"
 	"leo2api/internal/token"
 )
@@ -641,6 +642,30 @@ func (s *Server) shouldForceJWTRefreshOnValidation() bool {
 	return s.Config.GetInt("jwt_refresh_margin_minutes", 5) <= 0
 }
 
+// sessionProxyOverrideForKey returns the residential sticky proxy URL for a
+// session cache key ("id:<tokenID>" / "raw:<cookie>"), or "" when the
+// generator is off.
+func (s *Server) sessionProxyOverrideForKey(sessionKey string) string {
+	if s.Config == nil || !s.Config.GetBool("proxy_gen_enabled", false) {
+		return ""
+	}
+	st := proxygen.SettingsFromConfig(s.Config)
+	if !st.Enabled() {
+		return ""
+	}
+	return st.BuildURL(sessionKey)
+}
+
+// refreshSessionProxyOverrides re-applies generator settings to every cached
+// Leonardo session after a config change.
+func (s *Server) refreshSessionProxyOverrides() {
+	s.leoSessionMu.Lock()
+	defer s.leoSessionMu.Unlock()
+	for key, sess := range s.leoSessions {
+		sess.SetProxyOverride(s.sessionProxyOverrideForKey(key))
+	}
+}
+
 func (s *Server) getOrCreateLeonardoSession(tokenID, rawToken string) *leonardo.TokenSession {
 	rawToken = strings.TrimSpace(rawToken)
 	if rawToken == "" {
@@ -659,6 +684,10 @@ func (s *Server) getOrCreateLeonardoSession(tokenID, rawToken string) *leonardo.
 
 	if s.leoSessions == nil {
 		s.leoSessions = make(map[string]*leonardo.TokenSession)
+	}
+
+	applyProxyGen := func(sess *leonardo.TokenSession) {
+		sess.SetProxyOverride(s.sessionProxyOverrideForKey(key))
 	}
 
 	if session, ok := s.leoSessions[key]; ok {
@@ -680,11 +709,13 @@ func (s *Server) getOrCreateLeonardoSession(tokenID, rawToken string) *leonardo.
 			session.Plan = ""
 		}
 		s.bindLeonardoSessionCookiePersistence(tokenID, session)
+		applyProxyGen(session)
 		return session
 	}
 
 	session := &leonardo.TokenSession{FullCookie: rawToken, SourceCookie: rawToken}
 	s.bindLeonardoSessionCookiePersistence(tokenID, session)
+	applyProxyGen(session)
 	s.leoSessions[key] = session
 	return session
 }
@@ -1138,9 +1169,17 @@ func (s *Server) HandleAdminConfig(w http.ResponseWriter, r *http.Request) {
 		all["exhausted_token_auto_cleanup_enabled"] = toBool(all["exhausted_token_auto_cleanup_enabled"])
 		all["exhausted_token_auto_cleanup_interval_hours"] = normalizeConfigInt(all["exhausted_token_auto_cleanup_interval_hours"], 24, 1, 8760)
 		all["request_log_retention_limit"] = normalizeConfigInt(all["request_log_retention_limit"], 5000, 100, 100000)
+		all["proxy_gen_provider"] = proxygen.NormalizeProviderID(toString(all["proxy_gen_provider"]))
+		all["proxy_gen_session_mode"] = proxygen.NormalizeSessionMode(toString(all["proxy_gen_session_mode"]))
+		all["proxy_gen_country"] = proxygen.NormalizeCountry(toString(all["proxy_gen_country"]))
+		all["proxy_gen_sticky_minutes"] = normalizeConfigInt(all["proxy_gen_sticky_minutes"], 30, 1, 120)
+		all["proxy_gen_port"] = normalizeConfigInt(all["proxy_gen_port"], 0, 0, 65535)
 		// Mask sensitive values
 		if _, ok := all["admin_password"]; ok {
 			all["admin_password"] = "***"
+		}
+		if _, ok := all["proxy_gen_password"]; ok {
+			all["proxy_gen_password"] = "***"
 		}
 		stats, statsErr := s.getGeneratedStorageStats()
 		all["generated_usage_mb"] = generatedStorageUsageMB(stats.Bytes)
@@ -1160,6 +1199,26 @@ func (s *Server) HandleAdminConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if rawPwd, ok := updates["admin_password"].(string); ok && strings.TrimSpace(rawPwd) == "***" {
 		updates["admin_password"] = s.Config.GetString("admin_password", "admin")
+	}
+	if rawPwd, ok := updates["proxy_gen_password"].(string); ok && strings.TrimSpace(rawPwd) == "***" {
+		updates["proxy_gen_password"] = s.Config.GetString("proxy_gen_password", "")
+	}
+	// Only normalize generator keys the caller actually sent, so a partial
+	// update cannot clobber the stored credentials with defaults.
+	if _, ok := updates["proxy_gen_provider"]; ok {
+		updates["proxy_gen_provider"] = proxygen.NormalizeProviderID(toString(updates["proxy_gen_provider"]))
+	}
+	if _, ok := updates["proxy_gen_session_mode"]; ok {
+		updates["proxy_gen_session_mode"] = proxygen.NormalizeSessionMode(toString(updates["proxy_gen_session_mode"]))
+	}
+	if _, ok := updates["proxy_gen_country"]; ok {
+		updates["proxy_gen_country"] = proxygen.NormalizeCountry(toString(updates["proxy_gen_country"]))
+	}
+	if _, ok := updates["proxy_gen_sticky_minutes"]; ok {
+		updates["proxy_gen_sticky_minutes"] = normalizeConfigInt(updates["proxy_gen_sticky_minutes"], 30, 1, 120)
+	}
+	if _, ok := updates["proxy_gen_port"]; ok {
+		updates["proxy_gen_port"] = normalizeConfigInt(updates["proxy_gen_port"], 0, 0, 65535)
 	}
 	for _, key := range []string{"proxy", "resource_proxy", "leonardo_upload_proxy"} {
 		raw := strings.TrimSpace(toString(updates[key]))
@@ -1269,6 +1328,119 @@ func (s *Server) HandleProxyTest(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	writeJSON(w, 200, result)
+}
+
+// HandleProxyGenTest handles POST /api/v1/proxy/gen/test using the submitted
+// (possibly unsaved) generator form values. It builds a sticky proxy URL with
+// a one-off random sid and reports the observed exit IP.
+func (s *Server) HandleProxyGenTest(w http.ResponseWriter, r *http.Request) {
+	if err := s.requireAdmin(r); err != nil {
+		writeJSON(w, 401, map[string]string{"detail": "unauthorized"})
+		return
+	}
+
+	var body struct {
+		Provider      string `json:"provider"`
+		Host          string `json:"host"`
+		Port          int    `json:"port"`
+		Username      string `json:"username"`
+		Password      string `json:"password"`
+		Country       string `json:"country"`
+		SessionMode   string `json:"session_mode"`
+		StickyMinutes int    `json:"sticky_minutes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, 400, map[string]string{"detail": "invalid body"})
+		return
+	}
+
+	password := body.Password
+	if strings.TrimSpace(password) == "***" {
+		password = s.Config.GetString("proxy_gen_password", "")
+	}
+	st := proxygen.Settings{
+		ProviderID:    proxygen.NormalizeProviderID(body.Provider),
+		Host:          strings.TrimSpace(body.Host),
+		Port:          body.Port,
+		Username:      strings.TrimSpace(body.Username),
+		Password:      password,
+		Country:       proxygen.NormalizeCountry(body.Country),
+		SessionMode:   proxygen.NormalizeSessionMode(body.SessionMode),
+		StickyMinutes: body.StickyMinutes,
+	}
+	if !st.Enabled() {
+		writeJSON(w, 400, map[string]string{"detail": "供应商网关地址、端口和账号都必填"})
+		return
+	}
+
+	testURL := st.BuildURLWithSID(proxygen.RandomSID())
+	sampleAccountURL := st.BuildURL("id:示例账号")
+
+	start := time.Now()
+	ipInfo, probeErr := probeExitIPThroughProxy(testURL)
+	result := map[string]interface{}{
+		"ok":                 probeErr == nil,
+		"proxy_url":          proxygen.MaskProxyURL(testURL),
+		"sample_account_url": proxygen.MaskProxyURL(sampleAccountURL),
+		"elapsed_ms":         time.Since(start).Milliseconds(),
+	}
+	if probeErr != nil {
+		result["message"] = probeErr.Error()
+	} else {
+		result["exit_ip"] = ipInfo.IP
+		result["exit_country"] = ipInfo.Country
+		result["exit_city"] = ipInfo.City
+		result["exit_org"] = ipInfo.Org
+		result["message"] = "代理可用，出口信息如上"
+	}
+	writeJSON(w, 200, result)
+}
+
+type exitIPInfo struct {
+	IP      string `json:"ip"`
+	City    string `json:"city"`
+	Country string `json:"country"`
+	Org     string `json:"org"`
+}
+
+func probeExitIPThroughProxy(proxyStr string) (*exitIPInfo, error) {
+	normalizedProxy, err := proxyfmt.NormalizeHTTPProxyURL(proxyStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proxy url: %w", err)
+	}
+	proxyURL, err := url.Parse(normalizedProxy)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proxy url: %w", err)
+	}
+	client := &http.Client{
+		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
+		Timeout:   20 * time.Second,
+	}
+	req, err := http.NewRequest("GET", "https://ipinfo.io/json", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "leo2api-proxy-test/1.0")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read exit ip response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("exit ip probe HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	var info exitIPInfo
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return nil, fmt.Errorf("parse exit ip response: %w", err)
+	}
+	if strings.TrimSpace(info.IP) == "" {
+		return nil, fmt.Errorf("exit ip response has no ip: %s", strings.TrimSpace(string(raw)))
+	}
+	return &info, nil
 }
 
 // HandleHealth handles GET /health.
@@ -3590,7 +3762,7 @@ func (s *Server) uploadLeonardoBytesToStagingWithFilename(session *leonardo.Toke
 			return nil, lastErr
 		}
 
-		err = s.LeonardoClient.UploadImageToS3(initResult.URL, initResult.Fields, mediaData, contentType)
+		err = s.LeonardoClient.UploadImageToS3(session, initResult.URL, initResult.Fields, mediaData, contentType)
 		if err == nil {
 			return initResult, nil
 		}

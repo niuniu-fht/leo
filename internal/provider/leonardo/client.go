@@ -81,12 +81,57 @@ type TokenSession struct {
 	FullCookie           string    // 完整的 cookie 字符串（用户从浏览器复制的）
 	SourceCookie         string    // 最近一次从持久化层读取的原始 Cookie；用于识别外部更新
 	JWT                  string    // Cognito id_token (short-lived, ~1h)
-	JWTExpiry            time.Time // JWT expiration time
+	JWTExpiry            time.Time // JWT expiration
 	CognitoSub           string    // e.g. "5f2e877a-0c1a-4ea1-b893-bfb4a6567a22"
 	HasuraUserID         string    // e.g. "d5b484fd-1dcc-4cf5-a7a1-9ea83abd41ce"
 	Email                string
 	Plan                 string
 	LastRefreshed        time.Time
+	// ProxyOverride routes this session's Leonardo traffic through a dedicated
+	// proxy URL (residential sticky exit per account). Empty = client default.
+	// Guarded by mu together with proxyClients.
+	ProxyOverride string
+	proxyClients  *sessionProxyClients
+}
+
+// SetProxyOverride updates the per-session proxy. Changing the URL drops the
+// lazily built client set so the next call rebuilds against the new exit.
+func (s *TokenSession) SetProxyOverride(proxyURL string) {
+	if s == nil {
+		return
+	}
+	proxyURL = strings.TrimSpace(proxyURL)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ProxyOverride == proxyURL {
+		return
+	}
+	s.ProxyOverride = proxyURL
+	old := s.proxyClients
+	s.proxyClients = nil
+	if old != nil {
+		old.closeIdle()
+	}
+}
+
+func (s *TokenSession) proxyOverrideSnapshot() (string, *sessionProxyClients) {
+	if s == nil {
+		return "", nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ProxyOverride, s.proxyClients
+}
+
+func (s *TokenSession) storeProxyClients(clients *sessionProxyClients) {
+	if s == nil || clients == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if strings.TrimSpace(s.ProxyOverride) != "" && s.proxyClients == nil {
+		s.proxyClients = clients
+	}
 }
 
 // CookieSnapshot returns the current cookie string, including any server
@@ -162,6 +207,134 @@ type Client struct {
 	// introspectionDisabled caches the (permanent) GraphQL introspection
 	// rejection so failure-reason probing does not retry a doomed query.
 	introspectionDisabled atomic.Bool
+}
+
+// sessionProxyClients holds the HTTP clients bound to one session's
+// ProxyOverride (residential sticky exit). Built lazily, reused for the
+// session's lifetime.
+type sessionProxyClients struct {
+	graphql      *http.Client
+	uploadInit   *http.Client
+	upload       *http.Client
+	impersonator *req.Client
+}
+
+// sessionClients returns the per-session client set, or nil when the session
+// has no proxy override (callers then fall back to the global clients).
+func (c *Client) sessionClients(session *TokenSession) *sessionProxyClients {
+	if c == nil || session == nil {
+		return nil
+	}
+	override, cached := session.proxyOverrideSnapshot()
+	if strings.TrimSpace(override) == "" {
+		return nil
+	}
+	if cached != nil {
+		return cached
+	}
+	clients := &sessionProxyClients{
+		graphql:      newSessionHTTPClient(override, defaultClientTimeout),
+		uploadInit:   newSessionHTTPClient(override, uploadInitTimeout),
+		upload:       newSessionHTTPClient(override, s3UploadRequestTimeout),
+		impersonator: newLeonardoSessionImpersonator(override, sessionRefreshTimeout),
+	}
+	session.storeProxyClients(clients)
+	return clients
+}
+
+// newSessionHTTPClient builds a per-session client whose transport reaps idle
+// connections quickly, so hundreds of sticky exits cannot pile up sockets
+// through the residential gateway.
+func newSessionHTTPClient(proxy string, timeout time.Duration) *http.Client {
+	normalizedProxy, err := proxyfmt.NormalizeHTTPProxyURL(proxy)
+	if err != nil {
+		normalizedProxy = strings.TrimSpace(proxy)
+	}
+	proxyURL, _ := url.Parse(normalizedProxy)
+	transport := &http.Transport{
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ExpectContinueTimeout: 5 * time.Second,
+		MaxIdleConns:          4,
+		MaxIdleConnsPerHost:   2,
+	}
+	if proxyURL != nil && strings.TrimSpace(proxyURL.Host) != "" {
+		transport.Proxy = http.ProxyURL(proxyURL)
+	}
+	return &http.Client{Transport: transport, Timeout: timeout}
+}
+
+// closeIdle drops pooled sockets for this session's exit.
+func (spc *sessionProxyClients) closeIdle() {
+	if spc == nil {
+		return
+	}
+	if spc.graphql != nil {
+		spc.graphql.CloseIdleConnections()
+	}
+	if spc.uploadInit != nil {
+		spc.uploadInit.CloseIdleConnections()
+	}
+	if spc.upload != nil {
+		spc.upload.CloseIdleConnections()
+	}
+}
+
+// graphQLClientFor picks the GraphQL HTTP client honoring the session's
+// per-account proxy override.
+func (c *Client) graphQLClientFor(session *TokenSession) *http.Client {
+	if sc := c.sessionClients(session); sc != nil && sc.graphql != nil {
+		return sc.graphql
+	}
+	if c == nil {
+		return http.DefaultClient
+	}
+	return c.httpClient
+}
+
+// impersonatorFor picks the Chrome-impersonating refresh client honoring the
+// session's per-account proxy override.
+func (c *Client) impersonatorFor(session *TokenSession) *req.Client {
+	if sc := c.sessionClients(session); sc != nil && sc.impersonator != nil {
+		return sc.impersonator
+	}
+	if c == nil {
+		return nil
+	}
+	return c.sessionImpersonatorClient
+}
+
+// uploadInitClientFor picks the upload-init client. "direct"/"custom" upload
+// policies stay global; "basic" follows the per-account override when set.
+func (c *Client) uploadInitClientFor(session *TokenSession) *http.Client {
+	if c == nil {
+		return http.DefaultClient
+	}
+	if c.uploadProxyMode == "basic" {
+		if sc := c.sessionClients(session); sc != nil && sc.uploadInit != nil {
+			return sc.uploadInit
+		}
+	}
+	return c.uploadInitHTTPClient
+}
+
+// uploadClientFor picks the S3 upload client like uploadInitClientFor.
+func (c *Client) uploadClientFor(session *TokenSession) *http.Client {
+	if c == nil {
+		return http.DefaultClient
+	}
+	if c.uploadProxyMode == "basic" {
+		if sc := c.sessionClients(session); sc != nil && sc.upload != nil {
+			return sc.upload
+		}
+	}
+	return c.uploadHTTPClient
+}
+
+// sessionHasProxy reports whether the session carries a per-account proxy.
+func (c *Client) sessionHasProxy(session *TokenSession) bool {
+	override, _ := session.proxyOverrideSnapshot()
+	return strings.TrimSpace(override) != ""
 }
 
 // NewClient creates a new Leonardo client.
@@ -549,7 +722,7 @@ func (c *Client) refreshSession(session *TokenSession, forceGetSession bool) err
 
 	for attempt := 0; attempt < 2; attempt++ {
 		for profileIndex, headers := range profiles {
-			result, err := c.doSessionRefreshAttempt(currentCookie, headers)
+			result, err := c.doSessionRefreshAttempt(session, currentCookie, headers)
 			if err != nil {
 				lastErr = fmt.Errorf("get-session request profile=%d: %w", profileIndex+1, err)
 				continue
@@ -777,10 +950,12 @@ func doSessionRefreshAttemptWithReqClient(client *req.Client, cookieStr string, 
 	}, nil
 }
 
-func (c *Client) doSessionRefreshAttempt(cookieStr string, headers map[string]string) (*sessionRefreshHTTPResult, error) {
-	if c != nil && c.sessionImpersonatorClient != nil && c.httpClient == c.defaultHTTPClient {
-		result, err := doSessionRefreshAttemptWithReqClient(c.sessionImpersonatorClient, cookieStr, headers)
-		if err != nil && strings.TrimSpace(c.proxy) != "" && isProxyConnectionError(err) && c.directSessionImpersonatorClient != nil {
+func (c *Client) doSessionRefreshAttempt(session *TokenSession, cookieStr string, headers map[string]string) (*sessionRefreshHTTPResult, error) {
+	impersonator := c.impersonatorFor(session)
+	usingProxy := c != nil && (strings.TrimSpace(c.proxy) != "" || c.sessionHasProxy(session))
+	if c != nil && impersonator != nil && c.httpClient == c.defaultHTTPClient {
+		result, err := doSessionRefreshAttemptWithReqClient(impersonator, cookieStr, headers)
+		if err != nil && usingProxy && isProxyConnectionError(err) && c.directSessionImpersonatorClient != nil {
 			log.Printf("[Leonardo] get-session proxy path failed, retrying direct: %v", err)
 			return doSessionRefreshAttemptWithReqClient(c.directSessionImpersonatorClient, cookieStr, headers)
 		}
@@ -796,7 +971,7 @@ func (c *Client) doSessionRefreshAttempt(cookieStr string, headers map[string]st
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	client := c.httpClient
+	client := c.graphQLClientFor(session)
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -1030,7 +1205,7 @@ func (c *Client) QueryCredits(session *TokenSession) (*Credits, error) {
 		Query:         getTokensQuery,
 	}
 
-	body, err := c.doGraphQL(jwt, gqlReq)
+	body, err := c.doGraphQL(session, jwt, gqlReq)
 	if err != nil {
 		return nil, err
 	}
@@ -1350,9 +1525,15 @@ func isAllowedSeedance480pSize(width int, height int) bool {
 }
 
 // doGraphQL sends a GraphQL request and returns the raw response body.
-func (c *Client) doGraphQL(jwt string, gqlReq graphqlRequest) ([]byte, error) {
-	body, err := c.doGraphQLWithClient(c.httpClient, jwt, gqlReq)
-	if err != nil && c != nil && c.directHTTPClient != nil && strings.TrimSpace(c.proxy) != "" && isProxyConnectionError(err) {
+// A non-nil session routes the request through that account's sticky proxy.
+func (c *Client) doGraphQL(session *TokenSession, jwt string, gqlReq graphqlRequest) ([]byte, error) {
+	client := c.graphQLClientFor(session)
+	body, err := c.doGraphQLWithClient(client, jwt, gqlReq)
+	usingProxy := c != nil && strings.TrimSpace(c.proxy) != ""
+	if session != nil && c.sessionHasProxy(session) {
+		usingProxy = true
+	}
+	if err != nil && c != nil && c.directHTTPClient != nil && usingProxy && isProxyConnectionError(err) {
 		log.Printf("[Leonardo] GraphQL proxy path failed, retrying direct: %v", err)
 		return c.doGraphQLWithClient(c.directHTTPClient, jwt, gqlReq)
 	}
@@ -1743,7 +1924,7 @@ func (c *Client) Generate(session *TokenSession, genReq *GenerateRequest) (*Gene
 		Query: generateMutation,
 	}
 
-	body, err := c.doGraphQL(jwt, gqlReq)
+	body, err := c.doGraphQL(session, jwt, gqlReq)
 	if err != nil {
 		return nil, err
 	}
@@ -1802,7 +1983,7 @@ func (c *Client) PollGenerationStatus(session *TokenSession, generationID string
 		Query: statusQuery,
 	}
 
-	body, err := c.doGraphQL(jwt, gqlReq)
+	body, err := c.doGraphQL(session, jwt, gqlReq)
 	if err != nil {
 		return nil, err
 	}
@@ -1864,7 +2045,7 @@ func (c *Client) GetGenerationDetail(session *TokenSession, generationID string)
 		Query: generationDetailQuery,
 	}
 
-	body, err := c.doGraphQL(jwt, gqlReq)
+	body, err := c.doGraphQL(session, jwt, gqlReq)
 	if err != nil {
 		return nil, err
 	}
@@ -1905,14 +2086,14 @@ func (c *Client) GetGenerationFailureReason(session *TokenSession, generationID 
 	jwt := session.JWT
 	session.mu.RUnlock()
 
-	if reason, err := c.queryGenerationModerationFailureReason(jwt, generationID); err == nil && strings.TrimSpace(reason) != "" {
+	if reason, err := c.queryGenerationModerationFailureReason(session, jwt, generationID); err == nil && strings.TrimSpace(reason) != "" {
 		return strings.TrimSpace(reason), nil
 	} else if err != nil {
 		log.Printf("[Leonardo] generation moderation failure probe failed for %s: %v", generationID, err)
 	}
 
 	if !c.introspectionDisabled.Load() {
-		if reason, err := c.queryGenerationFailureReasonByIntrospection(jwt, generationID); err == nil && strings.TrimSpace(reason) != "" {
+		if reason, err := c.queryGenerationFailureReasonByIntrospection(session, jwt, generationID); err == nil && strings.TrimSpace(reason) != "" {
 			return strings.TrimSpace(reason), nil
 		} else if err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "introspection is disabled") {
@@ -1923,7 +2104,7 @@ func (c *Client) GetGenerationFailureReason(session *TokenSession, generationID 
 	}
 
 	for _, fieldName := range generationFailureReasonFields {
-		reason, handled, err := c.queryGenerationFailureReasonField(jwt, generationID, fieldName)
+		reason, handled, err := c.queryGenerationFailureReasonField(session, jwt, generationID, fieldName)
 		if err != nil {
 			if isUnknownGraphQLFieldError(err, fieldName) {
 				continue
@@ -1938,9 +2119,9 @@ func (c *Client) GetGenerationFailureReason(session *TokenSession, generationID 
 	return "", nil
 }
 
-func (c *Client) queryGenerationModerationFailureReason(jwt string, generationID string) (string, error) {
-	classifications, classErr := c.queryGenerationPromptModerationClassifications(jwt, generationID)
-	errorCodes, noteErr := c.queryGenerationNoteFailureCodes(jwt, generationID)
+func (c *Client) queryGenerationModerationFailureReason(session *TokenSession, jwt string, generationID string) (string, error) {
+	classifications, classErr := c.queryGenerationPromptModerationClassifications(session, jwt, generationID)
+	errorCodes, noteErr := c.queryGenerationNoteFailureCodes(session, jwt, generationID)
 
 	if len(errorCodes) == 0 && len(classifications) == 0 {
 		if classErr != nil {
@@ -1960,7 +2141,7 @@ func (c *Client) queryGenerationModerationFailureReason(jwt string, generationID
 	return fmt.Sprintf("PROVIDER_MODERATION_ERROR: %s", strings.Join(classifications, ", ")), nil
 }
 
-func (c *Client) queryGenerationPromptModerationClassifications(jwt string, generationID string) ([]string, error) {
+func (c *Client) queryGenerationPromptModerationClassifications(session *TokenSession, jwt string, generationID string) ([]string, error) {
 	gqlReq := graphqlRequest{
 		OperationName: "GetGenerationPromptModerations",
 		Variables: map[string]interface{}{
@@ -1983,7 +2164,7 @@ func (c *Client) queryGenerationPromptModerationClassifications(jwt string, gene
 }`,
 	}
 
-	body, err := c.doGraphQL(jwt, gqlReq)
+	body, err := c.doGraphQL(session, jwt, gqlReq)
 	if err != nil {
 		return nil, err
 	}
@@ -2029,19 +2210,19 @@ func (c *Client) queryGenerationPromptModerationClassifications(jwt string, gene
 	return nil, nil
 }
 
-func (c *Client) queryGenerationNoteFailureCodes(jwt string, generationID string) ([]string, error) {
-	errorCodes, err := c.queryGenerationNoteFailureCodesObject(jwt, generationID)
+func (c *Client) queryGenerationNoteFailureCodes(session *TokenSession, jwt string, generationID string) ([]string, error) {
+	errorCodes, err := c.queryGenerationNoteFailureCodesObject(session, jwt, generationID)
 	if err == nil {
 		return errorCodes, nil
 	}
-	errorCodes, scalarErr := c.queryGenerationNoteFailureCodesScalar(jwt, generationID)
+	errorCodes, scalarErr := c.queryGenerationNoteFailureCodesScalar(session, jwt, generationID)
 	if scalarErr == nil {
 		return errorCodes, nil
 	}
 	return nil, err
 }
 
-func (c *Client) queryGenerationNoteFailureCodesObject(jwt string, generationID string) ([]string, error) {
+func (c *Client) queryGenerationNoteFailureCodesObject(session *TokenSession, jwt string, generationID string) ([]string, error) {
 	gqlReq := graphqlRequest{
 		OperationName: "GetGenerationFailureNotes",
 		Variables: map[string]interface{}{
@@ -2067,7 +2248,7 @@ func (c *Client) queryGenerationNoteFailureCodesObject(jwt string, generationID 
 }`,
 	}
 
-	body, err := c.doGraphQL(jwt, gqlReq)
+	body, err := c.doGraphQL(session, jwt, gqlReq)
 	if err != nil {
 		return nil, err
 	}
@@ -2130,7 +2311,7 @@ func failureIndicatingNoteType(noteType string) string {
 	return ""
 }
 
-func (c *Client) queryGenerationNoteFailureCodesScalar(jwt string, generationID string) ([]string, error) {
+func (c *Client) queryGenerationNoteFailureCodesScalar(session *TokenSession, jwt string, generationID string) ([]string, error) {
 	gqlReq := graphqlRequest{
 		OperationName: "GetGenerationFailureNotesScalar",
 		Variables: map[string]interface{}{
@@ -2154,7 +2335,7 @@ func (c *Client) queryGenerationNoteFailureCodesScalar(jwt string, generationID 
 }`,
 	}
 
-	body, err := c.doGraphQL(jwt, gqlReq)
+	body, err := c.doGraphQL(session, jwt, gqlReq)
 	if err != nil {
 		return nil, err
 	}
@@ -2198,8 +2379,8 @@ func (c *Client) queryGenerationNoteFailureCodesScalar(jwt string, generationID 
 	return nil, nil
 }
 
-func (c *Client) queryGenerationFailureReasonByIntrospection(jwt string, generationID string) (string, error) {
-	fields, err := c.listGenerationFields(jwt)
+func (c *Client) queryGenerationFailureReasonByIntrospection(session *TokenSession, jwt string, generationID string) (string, error) {
+	fields, err := c.listGenerationFields(session, jwt)
 	if err != nil {
 		return "", err
 	}
@@ -2249,7 +2430,7 @@ func (c *Client) queryGenerationFailureReasonByIntrospection(jwt string, generat
 }`, selection),
 	}
 
-	body, err := c.doGraphQL(jwt, gqlReq)
+	body, err := c.doGraphQL(session, jwt, gqlReq)
 	if err != nil {
 		return "", err
 	}
@@ -2281,7 +2462,7 @@ func (c *Client) queryGenerationFailureReasonByIntrospection(jwt string, generat
 	return "", nil
 }
 
-func (c *Client) queryGenerationFailureReasonField(jwt string, generationID string, fieldName string) (string, bool, error) {
+func (c *Client) queryGenerationFailureReasonField(session *TokenSession, jwt string, generationID string, fieldName string) (string, bool, error) {
 	gqlReq := graphqlRequest{
 		OperationName: "GetGenerationFailureReason",
 		Variables: map[string]interface{}{
@@ -2301,7 +2482,7 @@ func (c *Client) queryGenerationFailureReasonField(jwt string, generationID stri
 }`, fieldName),
 	}
 
-	body, err := c.doGraphQL(jwt, gqlReq)
+	body, err := c.doGraphQL(session, jwt, gqlReq)
 	if err != nil {
 		return "", false, err
 	}
@@ -2356,7 +2537,7 @@ func isUnknownGraphQLFieldError(err error, fieldName string) bool {
 	return strings.Contains(msg, "not found in type") && strings.Contains(msg, strings.ToLower(fieldName))
 }
 
-func (c *Client) listGenerationFields(jwt string) (map[string]*graphqlTypeRef, error) {
+func (c *Client) listGenerationFields(session *TokenSession, jwt string) (map[string]*graphqlTypeRef, error) {
 	gqlReq := graphqlRequest{
 		OperationName: "IntrospectGenerationType",
 		Query: `query IntrospectGenerationType {
@@ -2384,7 +2565,7 @@ func (c *Client) listGenerationFields(jwt string) (map[string]*graphqlTypeRef, e
 }`,
 	}
 
-	body, err := c.doGraphQL(jwt, gqlReq)
+	body, err := c.doGraphQL(session, jwt, gqlReq)
 	if err != nil {
 		return nil, err
 	}
@@ -2608,7 +2789,7 @@ func (c *Client) UploadInitMedia(session *TokenSession, ext string, originalFile
 	}
 
 	for attempt := 1; attempt <= uploadInitMaxAttempts; attempt++ {
-		body, err := c.doGraphQLWithClient(c.uploadInitHTTPClient, jwt, gqlReq)
+		body, err := c.doGraphQLWithClient(c.uploadInitClientFor(session), jwt, gqlReq)
 		if err != nil {
 			if attempt < uploadInitMaxAttempts && isRetryableGraphQLError(err) {
 				log.Printf("[Leonardo] Upload init attempt %d/%d failed: %v; retrying", attempt, uploadInitMaxAttempts, err)
@@ -2673,7 +2854,7 @@ func (c *Client) WaitForInitImage(session *TokenSession, uploadID string, timeou
 			Query: initImageModerationQuery,
 		}
 
-		body, err := c.doGraphQL(jwt, gqlReq)
+		body, err := c.doGraphQL(session, jwt, gqlReq)
 		if err != nil {
 			if isRetryableGraphQLError(err) {
 				log.Printf("[Leonardo] Transient init image polling error for uploadID=%s: %v; retrying", uploadID, err)
@@ -2752,7 +2933,7 @@ func (c *Client) WaitForUploadedMedia(session *TokenSession, uploadID string, ti
 			Query: uploadedMediaByIDQuery,
 		}
 
-		body, err := c.doGraphQL(jwt, gqlReq)
+		body, err := c.doGraphQL(session, jwt, gqlReq)
 		if err != nil {
 			if isRetryableGraphQLError(err) {
 				log.Printf("[Leonardo] Transient uploaded_media polling error for uploadID=%s: %v; retrying", uploadID, err)
@@ -2903,7 +3084,8 @@ func isRetryableUploadStatus(statusCode int) bool {
 
 // UploadImageToS3 uploads the actual image data to the S3 presigned URL.
 // fieldsJSON is the JSON string returned by uploadImage, containing S3 form fields.
-func (c *Client) UploadImageToS3(uploadURL string, fieldsJSON string, imageData []byte, contentType string) error {
+// A non-nil session routes the upload through that account's sticky proxy.
+func (c *Client) UploadImageToS3(session *TokenSession, uploadURL string, fieldsJSON string, imageData []byte, contentType string) error {
 	fields, err := parseUploadFields(fieldsJSON)
 	if err != nil {
 		return err
@@ -2919,10 +3101,7 @@ func (c *Client) UploadImageToS3(uploadURL string, fieldsJSON string, imageData 
 		req.Close = true
 		req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
 
-		client := c.httpClient
-		if c.uploadHTTPClient != nil {
-			client = c.uploadHTTPClient
-		}
+		client := c.uploadClientFor(session)
 		resp, err := client.Do(req)
 		if err != nil {
 			if attempt < s3UploadMaxAttempts && isRetryableUploadError(err) {

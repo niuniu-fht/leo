@@ -24,6 +24,7 @@ import (
 
 	"leo2api/internal/config"
 	"leo2api/internal/provider/leonardo"
+	"leo2api/internal/proxygen"
 	"leo2api/internal/reqlog"
 	"leo2api/internal/token"
 )
@@ -2543,6 +2544,15 @@ func (s *Server) reloadRuntimeClients() {
 	if s.Config.GetBool("use_proxy", false) {
 		basicProxy = s.Config.GetString("proxy", "")
 	}
+	genActive := false
+	genSt := proxygen.SettingsFromConfig(s.Config)
+	if s.Config.GetBool("proxy_gen_enabled", false) && genSt.Enabled() {
+		basicProxy = genSt.BuildRotatingURL()
+		genActive = true
+	}
+	if genActive {
+		log.Printf("[proxy] residential generator active: provider=%s country=%s mode=%s sticky=%dm", genSt.ProviderID, genSt.Country, genSt.SessionMode, genSt.StickyMinutes)
+	}
 
 	uploadMode := "basic"
 	uploadProxy := ""
@@ -2559,6 +2569,7 @@ func (s *Server) reloadRuntimeClients() {
 	if s.Config != nil {
 		s.LeonardoClient.SetJWTRefreshMarginMinutes(s.Config.GetInt("jwt_refresh_margin_minutes", 5))
 	}
+	s.refreshSessionProxyOverrides()
 	if s.ReqLog != nil {
 		limit := 5000
 		if s.Config != nil {

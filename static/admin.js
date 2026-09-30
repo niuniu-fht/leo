@@ -1389,6 +1389,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   const confResourceProxy = document.getElementById("confResourceProxy");
   const confLeonardoUploadProxyMode = document.getElementById("confLeonardoUploadProxyMode");
   const confLeonardoUploadProxy = document.getElementById("confLeonardoUploadProxy");
+  const confProxyGenEnabled = document.getElementById("confProxyGenEnabled");
+  const confProxyGenProvider = document.getElementById("confProxyGenProvider");
+  const confProxyGenHost = document.getElementById("confProxyGenHost");
+  const confProxyGenPort = document.getElementById("confProxyGenPort");
+  const confProxyGenUsername = document.getElementById("confProxyGenUsername");
+  const confProxyGenPassword = document.getElementById("confProxyGenPassword");
+  const confProxyGenSessionMode = document.getElementById("confProxyGenSessionMode");
+  const confProxyGenStickyMinutes = document.getElementById("confProxyGenStickyMinutes");
+  const confProxyGenCountry = document.getElementById("confProxyGenCountry");
+  const testProxyGenBtn = document.getElementById("testProxyGenBtn");
+  const proxyGenTestResult = document.getElementById("proxyGenTestResult");
   const confGptImageSizeMode = document.getElementById("confGptImageSizeMode");
   const confImageSizeModeGptImage2High = document.getElementById("confImageSizeModeGptImage2High");
   const confImageSizeModeGptImage2Higher = document.getElementById("confImageSizeModeGptImage2Higher");
@@ -1656,6 +1667,17 @@ document.addEventListener("DOMContentLoaded", async () => {
         confResourceProxy.value = data.resource_proxy || "";
         confLeonardoUploadProxyMode.value = String(data.leonardo_upload_proxy_mode || "basic");
         confLeonardoUploadProxy.value = data.leonardo_upload_proxy || "";
+        if (confProxyGenEnabled) {
+          confProxyGenEnabled.checked = data.proxy_gen_enabled || false;
+          confProxyGenProvider.value = String(data.proxy_gen_provider || "1024proxy");
+          confProxyGenHost.value = data.proxy_gen_host || "";
+          confProxyGenPort.value = data.proxy_gen_port || "";
+          confProxyGenUsername.value = data.proxy_gen_username || "";
+          confProxyGenPassword.value = data.proxy_gen_password || "";
+          confProxyGenSessionMode.value = String(data.proxy_gen_session_mode || "sticky");
+          confProxyGenStickyMinutes.value = data.proxy_gen_sticky_minutes || 30;
+          confProxyGenCountry.value = String(data.proxy_gen_country || "");
+        }
         if (confGptImageSizeMode) {
           const imageSizeMode = normalizeImageSizeModeValue(data.image_size_mode_gpt_image_2 || data.gpt_image_size_mode || "request");
           confGptImageSizeMode.value = imageSizeMode;
@@ -1779,6 +1801,15 @@ document.addEventListener("DOMContentLoaded", async () => {
         resource_proxy: confResourceProxy.value.trim(),
         leonardo_upload_proxy_mode: String(confLeonardoUploadProxyMode?.value || "basic").trim() || "basic",
         leonardo_upload_proxy: confLeonardoUploadProxy.value.trim(),
+        proxy_gen_enabled: confProxyGenEnabled ? confProxyGenEnabled.checked : false,
+        proxy_gen_provider: String(confProxyGenProvider?.value || "1024proxy").trim() || "1024proxy",
+        proxy_gen_host: (confProxyGenHost?.value || "").trim(),
+        proxy_gen_port: parseInt(confProxyGenPort?.value, 10) || 0,
+        proxy_gen_username: (confProxyGenUsername?.value || "").trim(),
+        proxy_gen_password: confProxyGenPassword?.value || "",
+        proxy_gen_session_mode: String(confProxyGenSessionMode?.value || "sticky").trim() || "sticky",
+        proxy_gen_sticky_minutes: parseInt(confProxyGenStickyMinutes?.value, 10) || 30,
+        proxy_gen_country: String(confProxyGenCountry?.value || "").trim(),
         gpt_image_size_mode: normalizeImageSizeModeValue(confGptImageSizeMode?.value || "request"),
         image_size_mode_gpt_image_2: normalizeImageSizeModeValue(confGptImageSizeMode?.value || "request"),
         image_size_mode_gpt_image_2_high: normalizeImageSizeModeValue(confImageSizeModeGptImage2High?.value || "request"),
@@ -2061,6 +2092,81 @@ document.addEventListener("DOMContentLoaded", async () => {
       proxyTestResult.textContent = formatProxyTestResult(data);
     }
     showToast("代理与业务权限检测已完成", false);
+  }
+
+  function formatProxyGenTestResult(data) {
+    const lines = [];
+    lines.push(data.ok ? "✅ 代理可用" : "❌ 代理不可用");
+    if (typeof data.elapsed_ms === "number") {
+      lines.push(`耗时：${data.elapsed_ms} ms`);
+    }
+    if (data.exit_ip) {
+      lines.push(`出口 IP：${data.exit_ip}`);
+    }
+    if (data.exit_country) {
+      lines.push(`出口国家/城市：${data.exit_country}${data.exit_city ? " / " + data.exit_city : ""}`);
+    }
+    if (data.exit_org) {
+      lines.push(`运营商：${data.exit_org}`);
+    }
+    if (data.proxy_url) {
+      lines.push(`本次测试代理（随机 sid）：${data.proxy_url}`);
+    }
+    if (data.sample_account_url) {
+      lines.push(`账号粘性代理示例（sid 固定不变）：${data.sample_account_url}`);
+    }
+    if (data.message && !data.ok) {
+      lines.push(`错误：${data.message}`);
+    }
+    return lines.join("\n");
+  }
+
+  async function handleProxyGenTest() {
+    const payload = {
+      provider: String(confProxyGenProvider?.value || "1024proxy").trim(),
+      host: (confProxyGenHost?.value || "").trim(),
+      port: parseInt(confProxyGenPort?.value, 10) || 0,
+      username: (confProxyGenUsername?.value || "").trim(),
+      password: confProxyGenPassword?.value || "",
+      country: String(confProxyGenCountry?.value || "").trim(),
+      session_mode: String(confProxyGenSessionMode?.value || "sticky").trim(),
+      sticky_minutes: parseInt(confProxyGenStickyMinutes?.value, 10) || 30,
+    };
+    if (!payload.host || !payload.port || !payload.username) {
+      throw new Error("请先填写网关地址、端口和代理账号");
+    }
+    const res = await fetch("/api/v1/proxy/gen/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.detail || "住宅代理测试失败");
+    }
+    if (proxyGenTestResult) {
+      proxyGenTestResult.textContent = formatProxyGenTestResult(data);
+    }
+    showToast("住宅代理测试已完成", false);
+  }
+
+  if (testProxyGenBtn) {
+    testProxyGenBtn.addEventListener("click", async () => {
+      testProxyGenBtn.disabled = true;
+      if (proxyGenTestResult) {
+        proxyGenTestResult.textContent = "正在通过住宅代理获取出口 IP，请稍候...";
+      }
+      try {
+        await handleProxyGenTest();
+      } catch (err) {
+        if (proxyGenTestResult) {
+          proxyGenTestResult.textContent = String(err?.message || err || "住宅代理测试失败");
+        }
+        showToast(err.message || "住宅代理测试失败", true);
+      } finally {
+        testProxyGenBtn.disabled = false;
+      }
+    });
   }
 
   if (testProxyBtn) {

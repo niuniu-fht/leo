@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Leo2API 控制台</title>
   <link rel="stylesheet" href="/static/vendor/tabler/tabler.min.css" />
-  <link rel="stylesheet" href="/static/admin.css?v=20260928-1" />
+  <link rel="stylesheet" href="/static/admin.css?v=20260930-1" />
 </head>
 <body class="d-flex flex-column min-vh-100">
   <header class="navbar navbar-expand-md navbar-dark d-print-none leo-navbar">
@@ -243,6 +243,82 @@
               </section>
 
               <section id="cfg-network" class="config-cat-pane">
+                <div class="form-group mb-4 p-3" style="border: 1px solid rgba(128,128,128,.25); border-radius: 10px;">
+                  <label class="form-check checkbox-label" style="user-select: none;">
+                    <input type="checkbox" id="confProxyGenEnabled" class="form-check-input" />
+                    <span class="form-check-label">启用住宅代理生成器（每账号独立粘性出口 IP）</span>
+                  </label>
+                  <p class="help text-secondary small mt-1">只需填代理供应商的账号密码。开启后：每个 Leonardo 账号自动分配一个随机且固定不变的会话 ID（粘性出口 IP），生成、轮询、上传、刷新 Token 全部走账号自己的出口；账号导入校验等公共请求走轮换出口。原有的“基础代理地址”将被忽略。</p>
+
+                  <div class="row g-2 mt-1">
+                    <div class="col-md-4">
+                      <label class="form-label" for="confProxyGenProvider">代理供应商</label>
+                      <select id="confProxyGenProvider" class="form-select input-text">
+                        <option value="1024proxy">1024Proxy</option>
+                        <option value="b2proxy">B2Proxy</option>
+                        <option value="cliproxy">CliProxy</option>
+                        <option value="iprocket">IPRocket</option>
+                        <option value="custom">自定义</option>
+                      </select>
+                    </div>
+                    <div class="col-md-5">
+                      <label class="form-label" for="confProxyGenHost">网关地址 (Host)</label>
+                      <input type="text" id="confProxyGenHost" class="form-control input-text" placeholder="供应商后台给出的网关域名，如 gate.xxx.com" />
+                    </div>
+                    <div class="col-md-3">
+                      <label class="form-label" for="confProxyGenPort">网关端口</label>
+                      <input type="number" id="confProxyGenPort" class="form-control input-text" step="1" min="1" max="65535" placeholder="如 8888" />
+                    </div>
+                    <div class="col-md-6">
+                      <label class="form-label" for="confProxyGenUsername">代理账号 (用户名)</label>
+                      <input type="text" id="confProxyGenUsername" class="form-control input-text" autocomplete="off" placeholder="供应商子账号用户名" />
+                    </div>
+                    <div class="col-md-6">
+                      <label class="form-label" for="confProxyGenPassword">代理密码</label>
+                      <input type="password" id="confProxyGenPassword" class="form-control input-text" autocomplete="new-password" placeholder="供应商子账号密码" />
+                    </div>
+                    <div class="col-md-4">
+                      <label class="form-label" for="confProxyGenSessionMode">会话模式</label>
+                      <select id="confProxyGenSessionMode" class="form-select input-text">
+                        <option value="sticky">粘性（每账号固定出口 IP）</option>
+                        <option value="rotating">轮换（每次请求换 IP）</option>
+                      </select>
+                    </div>
+                    <div class="col-md-4">
+                      <label class="form-label" for="confProxyGenStickyMinutes">粘性时长 (分钟)</label>
+                      <input type="number" id="confProxyGenStickyMinutes" class="form-control input-text" step="1" min="1" max="120" placeholder="默认 30（1-120）" />
+                    </div>
+                    <div class="col-md-4">
+                      <label class="form-label" for="confProxyGenCountry">全局出口国家</label>
+                      <select id="confProxyGenCountry" class="form-select input-text">
+                        <option value="">随机（不限国家）</option>
+                        <option value="us">美国 US</option>
+                        <option value="gb">英国 GB</option>
+                        <option value="de">德国 DE</option>
+                        <option value="fr">法国 FR</option>
+                        <option value="nl">荷兰 NL</option>
+                        <option value="ca">加拿大 CA</option>
+                        <option value="au">澳大利亚 AU</option>
+                        <option value="jp">日本 JP</option>
+                        <option value="kr">韩国 KR</option>
+                        <option value="sg">新加坡 SG</option>
+                        <option value="hk">香港 HK</option>
+                        <option value="tw">台湾 TW</option>
+                        <option value="it">意大利 IT</option>
+                        <option value="es">西班牙 ES</option>
+                        <option value="br">巴西 BR</option>
+                        <option value="in">印度 IN</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="form-group mt-3">
+                    <button id="testProxyGenBtn" type="button" class="btn btn-outline-secondary">测试代理（输入账号密码后点这里）</button>
+                    <p class="help text-secondary small mt-1">用当前填写的供应商信息立即生成一条粘性代理并访问 ipinfo.io，返回真实出口 IP / 国家 / 运营商。不需要先保存配置。</p>
+                    <pre id="proxyGenTestResult" class="help text-secondary small mt-2 p-2 leo-pre" style="white-space: pre-wrap;">输入网关、账号、密码后点击上方按钮测试。</pre>
+                  </div>
+                </div>
+
                 <div class="form-group mb-3">
                   <label class="form-check checkbox-label" style="user-select: none;">
                     <input type="checkbox" id="confUseProxy" class="form-check-input" />
@@ -874,6 +950,6 @@
   <div id="appToast" class="toast leo-toast" role="status" aria-live="polite"></div>
 
   <script src="/static/vendor/tabler/tabler.min.js"></script>
-  <script src="/static/admin.js?v=20260928-1"></script>
+  <script src="/static/admin.js?v=20260930-1"></script>
 </body>
 </html>

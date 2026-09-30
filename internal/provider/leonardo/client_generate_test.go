@@ -35,7 +35,7 @@ func TestUploadImageToS3RetriesTransientUploadErrors(t *testing.T) {
 		}),
 	}
 
-	err := client.UploadImageToS3("https://example.com/upload", `{"key":"test"}`, []byte("image"), "image/png")
+	err := client.UploadImageToS3(nil, "https://example.com/upload", `{"key":"test"}`, []byte("image"), "image/png")
 	if err != nil {
 		t.Fatalf("UploadImageToS3 returned error: %v", err)
 	}

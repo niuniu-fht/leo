@@ -13,6 +13,7 @@ import (
 	"leo2api/internal/config"
 	"leo2api/internal/handler"
 	"leo2api/internal/provider/leonardo"
+	"leo2api/internal/proxygen"
 	"leo2api/internal/reqlog"
 	"leo2api/internal/store"
 	"leo2api/internal/token"
@@ -77,6 +78,15 @@ func main() {
 	proxy := ""
 	if cfg.GetBool("use_proxy", false) {
 		proxy = cfg.GetString("proxy", "")
+	}
+	genActive := false
+	genSt := proxygen.SettingsFromConfig(cfg)
+	if cfg.GetBool("proxy_gen_enabled", false) && genSt.Enabled() {
+		proxy = genSt.BuildRotatingURL()
+		genActive = true
+	}
+	if genActive {
+		log.Printf("[proxy] residential generator active: provider=%s country=%s mode=%s sticky=%dm", genSt.ProviderID, genSt.Country, genSt.SessionMode, genSt.StickyMinutes)
 	}
 	uploadMode := cfg.GetString("leonardo_upload_proxy_mode", "basic")
 	uploadProxy := cfg.GetString("leonardo_upload_proxy", "")
@@ -195,6 +205,7 @@ func main() {
 		}
 	})
 	mux.HandleFunc("/api/v1/proxy/test", srv.HandleProxyTest)
+	mux.HandleFunc("/api/v1/proxy/gen/test", srv.HandleProxyGenTest)
 	mux.HandleFunc("/api/v1/test-image", srv.HandleTestImageGeneration)
 
 	// ─── Leonardo API ───
@@ -338,4 +349,3 @@ func shouldSkipAccessLog(path string) bool {
 	}
 	return false
 }
-
