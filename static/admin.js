@@ -2096,18 +2096,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   function formatProxyGenTestResult(data) {
     const lines = [];
-    lines.push(data.ok ? "✅ 代理可用" : "❌ 代理不可用");
+    lines.push(data.ok ? "✅ 代理已连通，Leonardo 官方接口可达" : "❌ 代理不可用");
     if (typeof data.elapsed_ms === "number") {
       lines.push(`耗时：${data.elapsed_ms} ms`);
     }
-    if (data.exit_ip) {
-      lines.push(`出口 IP：${data.exit_ip}`);
+    if (typeof data.session_status === "number" && data.session_status > 0) {
+      lines.push(`app.leonardo.ai (get-session)：HTTP ${data.session_status}${data.session_challenge ? "（防爬质询，生产客户端可过）" : ""}`);
     }
-    if (data.exit_country) {
-      lines.push(`出口国家/城市：${data.exit_country}${data.exit_city ? " / " + data.exit_city : ""}`);
-    }
-    if (data.exit_org) {
-      lines.push(`运营商：${data.exit_org}`);
+    if (typeof data.graphql_status === "number") {
+      if (data.graphql_status > 0) {
+        lines.push(`api.leonardo.ai (GraphQL)：HTTP ${data.graphql_status}`);
+      } else {
+        lines.push("api.leonardo.ai (GraphQL)：未达（get-session 已证明代理连通）");
+      }
     }
     if (data.proxy_url) {
       lines.push(`本次测试代理（随机 sid）：${data.proxy_url}`);
@@ -2154,7 +2155,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     testProxyGenBtn.addEventListener("click", async () => {
       testProxyGenBtn.disabled = true;
       if (proxyGenTestResult) {
-        proxyGenTestResult.textContent = "正在通过住宅代理获取出口 IP，请稍候...";
+        proxyGenTestResult.textContent = "正在通过住宅代理直连 Leonardo 官方接口，请稍候...";
       }
       try {
         await handleProxyGenTest();

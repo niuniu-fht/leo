@@ -1377,33 +1377,41 @@ func (s *Server) HandleProxyGenTest(w http.ResponseWriter, r *http.Request) {
 	sampleAccountURL := st.BuildURL("id:示例账号")
 
 	start := time.Now()
-	ipInfo, probeErr := probeExitIPThroughProxy(testURL)
+	probe, probeErr := probeLeonardoThroughProxy(testURL)
 	result := map[string]interface{}{
-		"ok":                 probeErr == nil,
 		"proxy_url":          proxygen.MaskProxyURL(testURL),
 		"sample_account_url": proxygen.MaskProxyURL(sampleAccountURL),
 		"elapsed_ms":         time.Since(start).Milliseconds(),
 	}
 	if probeErr != nil {
+		result["ok"] = false
 		result["message"] = probeErr.Error()
 	} else {
-		result["exit_ip"] = ipInfo.IP
-		result["exit_country"] = ipInfo.Country
-		result["exit_city"] = ipInfo.City
-		result["exit_org"] = ipInfo.Org
-		result["message"] = "代理可用，出口信息如上"
+		result["ok"] = true
+		result["session_status"] = probe.SessionStatus
+		result["graphql_status"] = probe.GraphQLStatus
+		result["session_challenge"] = probe.SessionChallenge
+		if probe.SessionChallenge {
+			result["message"] = "代理已连通，Leonardo 可达（get-session 返回防爬质询，生产客户端带 Chrome 指纹可过）"
+		} else {
+			result["message"] = "代理已连通，Leonardo 官方接口可达"
+		}
 	}
 	writeJSON(w, 200, result)
 }
 
-type exitIPInfo struct {
-	IP      string `json:"ip"`
-	City    string `json:"city"`
-	Country string `json:"country"`
-	Org     string `json:"org"`
+// leonardoProbeResult reports raw HTTP reachability of the official Leonardo
+// endpoints through the proxy under test.
+type leonardoProbeResult struct {
+	SessionStatus    int
+	GraphQLStatus    int
+	SessionChallenge bool
 }
 
-func probeExitIPThroughProxy(proxyStr string) (*exitIPInfo, error) {
+// probeLeonardoThroughProxy drives the sticky proxy straight at the official
+// Leonardo endpoints. Any HTTP response (even 4xx) proves the tunnel works;
+// transport-level errors (429 from the gateway, timeouts, DNS) fail the probe.
+func probeLeonardoThroughProxy(proxyStr string) (*leonardoProbeResult, error) {
 	normalizedProxy, err := proxyfmt.NormalizeHTTPProxyURL(proxyStr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid proxy url: %w", err)
@@ -1416,31 +1424,37 @@ func probeExitIPThroughProxy(proxyStr string) (*exitIPInfo, error) {
 		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
 		Timeout:   20 * time.Second,
 	}
-	req, err := http.NewRequest("GET", "https://ipinfo.io/json", nil)
+
+	probe := &leonardoProbeResult{}
+	status, body, err := proxyProbeGET(client, leonardo.SessionURL)
 	if err != nil {
 		return nil, err
+	}
+	probe.SessionStatus = status
+	probe.SessionChallenge = strings.Contains(strings.ToLower(body), "challenge")
+
+	if status, _, err = proxyProbeGET(client, "https://api.leonardo.ai/v1/graphql"); err != nil {
+		// Session endpoint already proved the tunnel; report graphql as unreachable.
+		probe.GraphQLStatus = 0
+	} else {
+		probe.GraphQLStatus = status
+	}
+	return probe, nil
+}
+
+func proxyProbeGET(client *http.Client, targetURL string) (int, string, error) {
+	req, err := http.NewRequest("GET", targetURL, nil)
+	if err != nil {
+		return 0, "", err
 	}
 	req.Header.Set("User-Agent", "leo2api-proxy-test/1.0")
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return 0, "", err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, fmt.Errorf("read exit ip response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("exit ip probe HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
-	}
-	var info exitIPInfo
-	if err := json.Unmarshal(raw, &info); err != nil {
-		return nil, fmt.Errorf("parse exit ip response: %w", err)
-	}
-	if strings.TrimSpace(info.IP) == "" {
-		return nil, fmt.Errorf("exit ip response has no ip: %s", strings.TrimSpace(string(raw)))
-	}
-	return &info, nil
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	return resp.StatusCode, string(raw), nil
 }
 
 // HandleHealth handles GET /health.
