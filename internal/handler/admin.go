@@ -4923,23 +4923,12 @@ func (s *Server) getLeonardoSessionForModel(tokenID string, modelID string, imag
 		if info == nil {
 			return nil, ""
 		}
-		if !s.tokenCanAcceptMoreRunningTasks(tokenID) {
-			return nil, ""
-		}
-		// With the residential generator active the background refresh sweep
-		// is paused, so stored expires_at goes stale. Dispatch must not be
-		// blocked on it: ensureGenerationJWTUsable below refreshes on demand.
-		if !s.proxyGeneratorActive() {
-			if isExpiredTokenInfo(info) {
-				return nil, ""
-			}
-			if generationJWTWindowPriority(info) > 1 {
-				return nil, ""
-			}
-		}
-		if !s.tokenCanRunModelByCredits(info, modelID, imageSizeTier, videoReferenceMode) {
-			return nil, ""
-		}
+		// An explicitly pinned token is an admin decision (test-image and
+		// per-account diagnostics). Skip every local eligibility gate here:
+		// running-task, JWT-expiry and credit pre-checks all reject
+		// stale-but-alive accounts, which made pool sweeps impossible and
+		// silently benched recoverable tokens. ensureGenerationJWTUsable
+		// below refreshes the JWT on demand regardless of auto_refresh.
 		rawToken, _ := info["value"].(string)
 		if rawToken == "" {
 			return nil, ""
