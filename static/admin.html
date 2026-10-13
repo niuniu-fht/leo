@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Leo2API 控制台</title>
   <link rel="stylesheet" href="/static/vendor/tabler/tabler.min.css" />
-  <link rel="stylesheet" href="/static/admin.css?v=20260930-2" />
+  <link rel="stylesheet" href="/static/admin.css?v=20261013-1" />
 </head>
 <body class="d-flex flex-column min-vh-100">
   <header class="navbar navbar-expand-md navbar-dark d-print-none leo-navbar">
@@ -676,6 +676,14 @@
               <div class="col-6 col-md-3">
                 <div class="stat-card card">
                   <div class="card-body">
+                    <div class="stat-label text-secondary small">今日生图成功</div>
+                    <div id="logsStatsTodaySuccess" class="stat-value h3 mb-0">-</div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-6 col-md-3">
+                <div class="stat-card card">
+                  <div class="card-body">
                     <div class="stat-label text-secondary small">图片生成数</div>
                     <div id="logsStatsImageCount" class="stat-value h3 mb-0">-</div>
                   </div>
@@ -950,6 +958,6 @@
   <div id="appToast" class="toast leo-toast" role="status" aria-live="polite"></div>
 
   <script src="/static/vendor/tabler/tabler.min.js"></script>
-  <script src="/static/admin.js?v=20260930-2"></script>
+  <script src="/static/admin.js?v=20261013-1"></script>
 </body>
 </html>

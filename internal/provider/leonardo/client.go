@@ -1528,10 +1528,21 @@ func isAllowedSeedance480pSize(width int, height int) bool {
 // A non-nil session routes the request through that account's sticky proxy.
 func (c *Client) doGraphQL(session *TokenSession, jwt string, gqlReq graphqlRequest) ([]byte, error) {
 	client := c.graphQLClientFor(session)
-	body, err := c.doGraphQLWithClient(client, jwt, gqlReq)
 	usingProxy := c != nil && strings.TrimSpace(c.proxy) != ""
 	if session != nil && c.sessionHasProxy(session) {
 		usingProxy = true
+	}
+	// Transport interruptions (e.g. the proxy tunnel dropping mid-request)
+	// are retried in place on the same client, up to 3 total attempts.
+	var body []byte
+	var err error
+	for attempt := 1; ; attempt++ {
+		body, err = c.doGraphQLWithClient(client, jwt, gqlReq)
+		if err == nil || attempt >= 3 || !isTransportInterruptError(err) {
+			break
+		}
+		log.Printf("[Leonardo] GraphQL transport interrupted (attempt %d/3), retrying in place: %v", attempt, err)
+		time.Sleep(time.Duration(attempt) * 200 * time.Millisecond)
 	}
 	if err != nil && c != nil && c.directHTTPClient != nil && usingProxy && (isProxyConnectionError(err) || isProxyRateLimitedError(err)) {
 		log.Printf("[Leonardo] GraphQL proxy path failed (connection/rate-limit), retrying direct: %v", err)
@@ -1550,6 +1561,34 @@ func isProxyRateLimitedError(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "too many requests") && !strings.Contains(msg, "graphql returned")
+}
+
+// isTransportInterruptError matches connection-level failures where the
+// request never produced an HTTP response: dropped proxy tunnel mid-flight,
+// EOF, connection reset, TLS handshake trouble, etc. These are safe to retry
+// in place; HTTP-level GraphQL errors ("graphql returned N") are not.
+func isTransportInterruptError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"unexpected eof",
+		": eof",
+		"connection reset",
+		"broken pipe",
+		"proxyconnect",
+		"connection refused",
+		"tls: handshake",
+		"goaway",
+		"connection timed out",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func isProxyConnectionError(err error) bool {

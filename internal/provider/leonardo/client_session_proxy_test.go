@@ -97,3 +97,28 @@ func TestIsProxyRateLimitedError(t *testing.T) {
 		}
 	}
 }
+
+func TestIsTransportInterruptError(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want bool
+	}{
+		{`Post "https://api.leonardo.ai/v1/graphql": unexpected EOF`, true},
+		{`Post "https://api.leonardo.ai/v1/graphql": EOF`, true},
+		{`proxyconnect tcp: dial tcp: connection refused`, true},
+		{`read tcp 1.2.3.4:5->6.7.8.9:10: read: connection reset by peer`, true},
+		{`http2: server sent GOAWAY`, true},
+		{`graphql returned 429: {"code":"challenge"}`, false},
+		{"parse generate response: invalid character", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		var err error
+		if tc.msg != "" {
+			err = errors.New(tc.msg)
+		}
+		if got := isTransportInterruptError(err); got != tc.want {
+			t.Errorf("isTransportInterruptError(%q) = %v, want %v", tc.msg, got, tc.want)
+		}
+	}
+}

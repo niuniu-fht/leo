@@ -321,6 +321,7 @@ type Server struct {
 	GeneratedDir            string
 	LeonardoClient          *leonardo.Client
 	ReqLog                  *reqlog.Store
+	DailySuccess            *DailyCounter
 	generatedStorageMu      sync.Mutex
 	cookieImportMu          sync.Mutex
 	tokenSelectionMu        sync.Mutex
@@ -729,6 +730,9 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 		s.ReqLog.UpdateByGenerationID(result.GenerationID, "COMPLETE", 200, previewURL, "image", "")
 		s.ReqLog.UpdateDuration(result.GenerationID, elapsedSec)
 	}
+	// Persistent daily success counter (survives log rotation); one count per
+	// completed image request.
+	s.DailySuccess.Increment(1)
 	s.refreshTokenCredits(usedTokenID, session)
 
 	data, err := s.buildOpenAIImageResponseData(finalURLs, result.GenerationID, responseFormat)

@@ -1573,17 +1573,26 @@ func (s *Server) HandleLogsStats(w http.ResponseWriter, r *http.Request) {
 		rangeStr = "today"
 	}
 
+	todayDate, todayCount := "", int64(0)
+	if s.DailySuccess != nil {
+		todayDate, todayCount = s.DailySuccess.Snapshot()
+	}
 	if s.ReqLog == nil {
 		writeJSON(w, 200, map[string]interface{}{
 			"generated_images": 0, "generated_videos": 0,
 			"running_requests": 0,
 			"total_requests":   0, "failed_requests": 0,
-			"end_ts": float64(time.Now().Unix()),
+			"today_success":      todayCount,
+			"today_success_date": todayDate,
+			"end_ts":             float64(time.Now().Unix()),
 		})
 		return
 	}
 
-	writeJSON(w, 200, s.ReqLog.Stats(rangeStr))
+	stats := s.ReqLog.Stats(rangeStr)
+	stats["today_success"] = todayCount
+	stats["today_success_date"] = todayDate
+	writeJSON(w, 200, stats)
 }
 
 // HandleTokenRefresh handles POST /api/v1/tokens/{id}/refresh.

@@ -115,7 +115,9 @@ func main() {
 		GeneratedDir:   generatedDir,
 		LeonardoClient: leoClient,
 		ReqLog:         reqLogStore,
+		DailySuccess:   handler.NewDailyCounter(filepath.Join(configDir, "daily_success.json")),
 	}
+	srv.DailySuccess.StartFlusher()
 	srv.StartTokenDispatchBucketLoop()
 	srv.StartTokenAutoRefreshLoop()
 	srv.StartExhaustedTokenCleanupLoop()

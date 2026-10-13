@@ -1468,6 +1468,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const clearLogsBtn = document.getElementById("clearLogsBtn");
   const logStatsRange = document.getElementById("logStatsRange");
   const logStatsUpdatedAt = document.getElementById("logStatsUpdatedAt");
+  const logsStatsTodaySuccess = document.getElementById("logsStatsTodaySuccess");
   const logsStatsImageCount = document.getElementById("logsStatsImageCount");
   const logsStatsVideoCount = document.getElementById("logsStatsVideoCount");
   const logsStatsRunningCount = document.getElementById("logsStatsRunningCount");
@@ -2832,6 +2833,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const totalCount = Number(stats?.total_requests || 0);
     const failCount = Number(stats?.failed_requests || 0);
 
+    if (logsStatsTodaySuccess) logsStatsTodaySuccess.textContent = String(Number(stats?.today_success || 0));
     if (logsStatsImageCount) logsStatsImageCount.textContent = String(imageCount);
     if (logsStatsVideoCount) logsStatsVideoCount.textContent = String(videoCount);
     if (logsStatsRunningCount) logsStatsRunningCount.textContent = String(runningCount);
