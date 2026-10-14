@@ -2006,8 +2006,8 @@ var gptImageBanana1KPresets = []gptImagePreset{
 var gptImage2OfficialPresetsByScale = map[int][]gptImagePreset{
 	1: {
 		{Ratio: 1, Width: 1024, Height: 1024},
-		{Ratio: 21.0 / 9.0, Width: 1584, Height: 672},
-		{Ratio: 9.0 / 21.0, Width: 672, Height: 1584},
+		{Ratio: 21.0 / 9.0, Width: 1792, Height: 768},
+		{Ratio: 9.0 / 21.0, Width: 768, Height: 1792},
 		{Ratio: 16.0 / 9.0, Width: 1376, Height: 768},
 		{Ratio: 9.0 / 16.0, Width: 768, Height: 1376},
 		{Ratio: 3.0 / 2.0, Width: 1264, Height: 848},
@@ -2032,8 +2032,8 @@ var gptImage2OfficialPresetsByScale = map[int][]gptImagePreset{
 	},
 	4: {
 		{Ratio: 1, Width: 2880, Height: 2880},
-		{Ratio: 21.0 / 9.0, Width: 3808, Height: 1632},
-		{Ratio: 9.0 / 21.0, Width: 1632, Height: 3808},
+		{Ratio: 21.0 / 9.0, Width: 3584, Height: 1536},
+		{Ratio: 9.0 / 21.0, Width: 1536, Height: 3584},
 		{Ratio: 16.0 / 9.0, Width: 3584, Height: 2016},
 		{Ratio: 9.0 / 16.0, Width: 2016, Height: 3584},
 		{Ratio: 3.0 / 2.0, Width: 3504, Height: 2336},

@@ -169,12 +169,12 @@ func TestResolveGPTImageSizeMode1K(t *testing.T) {
 		{size: "1152x928", aspectRatio: "", wantWidth: 1152, wantHeight: 928, wantLabel: "1152x928"},
 		{size: "768x1376", aspectRatio: "", wantWidth: 768, wantHeight: 1376, wantLabel: "768x1376"},
 		{size: "1376x768", aspectRatio: "", wantWidth: 1376, wantHeight: 768, wantLabel: "1376x768"},
-		{size: "1584x672", aspectRatio: "", wantWidth: 1584, wantHeight: 672, wantLabel: "1584x672"},
-		{size: "672x1584", aspectRatio: "", wantWidth: 672, wantHeight: 1584, wantLabel: "672x1584"},
+		{size: "1792x768", aspectRatio: "", wantWidth: 1792, wantHeight: 768, wantLabel: "1792x768"},
+		{size: "768x1792", aspectRatio: "", wantWidth: 768, wantHeight: 1792, wantLabel: "768x1792"},
 		{size: "2:3", aspectRatio: "", wantWidth: 848, wantHeight: 1264, wantLabel: "848x1264"},
 		{size: "3:2", aspectRatio: "", wantWidth: 1264, wantHeight: 848, wantLabel: "1264x848"},
-		{size: "", aspectRatio: "21:9", wantWidth: 1584, wantHeight: 672, wantLabel: "1584x672"},
-		{size: "", aspectRatio: "9:21", wantWidth: 672, wantHeight: 1584, wantLabel: "672x1584"},
+		{size: "", aspectRatio: "21:9", wantWidth: 1792, wantHeight: 768, wantLabel: "1792x768"},
+		{size: "", aspectRatio: "9:21", wantWidth: 768, wantHeight: 1792, wantLabel: "768x1792"},
 		{size: "bad-size", aspectRatio: "", wantWidth: 1024, wantHeight: 1024, wantLabel: "1024x1024"},
 	}
 	for _, tt := range tests {
