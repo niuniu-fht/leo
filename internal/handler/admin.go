@@ -3920,7 +3920,7 @@ func (s *Server) downloadRemoteImage(remoteURL string) ([]byte, string, string, 
 		if err != nil {
 			return nil, "", "", err
 		}
-		req.Header.Set("User-Agent", "leo2api-image-fetch/1.0")
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36")
 		req.Header.Set("Accept", "image/*,*/*;q=0.8")
 		req.Close = true
 
@@ -4007,7 +4007,7 @@ func (s *Server) downloadRemoteVideo(remoteURL string) ([]byte, string, string, 
 		if err != nil {
 			return nil, "", "", 0, err
 		}
-		req.Header.Set("User-Agent", "leo2api-video-fetch/1.0")
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36")
 		req.Header.Set("Accept", "video/*,*/*;q=0.8")
 		req.Close = true
 
@@ -4095,7 +4095,7 @@ func (s *Server) downloadRemoteAudio(remoteURL string) ([]byte, string, string, 
 		if err != nil {
 			return nil, "", "", "", err
 		}
-		req.Header.Set("User-Agent", "leo2api-audio-fetch/1.0")
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36")
 		req.Header.Set("Accept", "audio/*,*/*;q=0.8")
 		req.Close = true
 

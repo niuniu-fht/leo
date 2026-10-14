@@ -3,6 +3,7 @@ package leonardo
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/imroc/req/v3"
+	utls "github.com/refraction-networking/utls"
 
 	"leo2api/internal/proxyfmt"
 )
@@ -114,6 +116,23 @@ func (s *TokenSession) SetProxyOverride(proxyURL string) {
 	}
 }
 
+// FingerprintKey returns a stable per-account identity used to pick a
+// consistent browser fingerprint variant (one account = one browser).
+func (s *TokenSession) FingerprintKey() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if strings.TrimSpace(s.CognitoSub) != "" {
+		return "sub:" + s.CognitoSub
+	}
+	if strings.TrimSpace(s.FullCookie) != "" {
+		return "cookie:" + s.FullCookie
+	}
+	return ""
+}
+
 func (s *TokenSession) proxyOverrideSnapshot() (string, *sessionProxyClients) {
 	if s == nil {
 		return "", nil
@@ -198,6 +217,8 @@ type Client struct {
 	directHTTPClient                *http.Client
 	sessionImpersonatorClient       *req.Client
 	directSessionImpersonatorClient *req.Client
+	graphqlImpersonatorVariants     map[int]*req.Client
+	directGraphqlImpersonatorClient *req.Client
 	uploadInitHTTPClient            *http.Client
 	uploadHTTPClient                *http.Client
 	proxy                           string
@@ -213,10 +234,11 @@ type Client struct {
 // ProxyOverride (residential sticky exit). Built lazily, reused for the
 // session's lifetime.
 type sessionProxyClients struct {
-	graphql      *http.Client
-	uploadInit   *http.Client
-	upload       *http.Client
-	impersonator *req.Client
+	graphql            *http.Client
+	graphqlImpersonats map[int]*req.Client // keyed by chromeVariant preset index
+	uploadInit         *http.Client
+	upload             *http.Client
+	impersonator       *req.Client
 }
 
 // sessionClients returns the per-session client set, or nil when the session
@@ -233,10 +255,11 @@ func (c *Client) sessionClients(session *TokenSession) *sessionProxyClients {
 		return cached
 	}
 	clients := &sessionProxyClients{
-		graphql:      newSessionHTTPClient(override, defaultClientTimeout),
-		uploadInit:   newSessionHTTPClient(override, uploadInitTimeout),
-		upload:       newSessionHTTPClient(override, s3UploadRequestTimeout),
-		impersonator: newLeonardoSessionImpersonator(override, sessionRefreshTimeout),
+		graphql:            newSessionHTTPClient(override, defaultClientTimeout),
+		graphqlImpersonats: make(map[int]*req.Client, len(chromeVariants)),
+		uploadInit:         newSessionHTTPClient(override, uploadInitTimeout),
+		upload:             newSessionHTTPClient(override, s3UploadRequestTimeout),
+		impersonator:       newLeonardoSessionImpersonator(override, sessionRefreshTimeout),
 	}
 	session.storeProxyClients(clients)
 	return clients
@@ -290,6 +313,72 @@ func (c *Client) graphQLClientFor(session *TokenSession) *http.Client {
 		return http.DefaultClient
 	}
 	return c.httpClient
+}
+
+// graphqlImpersonatorFor returns the Chrome-impersonating GraphQL client for
+// the session's assigned browser variant, honoring the per-account proxy
+// override. Impersonators are built lazily per variant and reused.
+func (c *Client) graphqlImpersonatorFor(session *TokenSession) *req.Client {
+	variant := sessionFingerprintVariant(session)
+	if session == nil {
+		return c.graphqlImpersonatorByVariant(variant)
+	}
+	override, _ := session.proxyOverrideSnapshot()
+	if strings.TrimSpace(override) == "" {
+		return c.graphqlImpersonatorByVariant(variant)
+	}
+	if sc := c.sessionClients(session); sc != nil {
+		if sc.graphqlImpersonats == nil {
+			sc.graphqlImpersonats = make(map[int]*req.Client, len(chromeVariants))
+		}
+		if client, ok := sc.graphqlImpersonats[variant.Preset]; ok {
+			return client
+		}
+		client := newLeonardoVariantImpersonator(override, defaultClientTimeout, variant)
+		sc.graphqlImpersonats[variant.Preset] = client
+		return client
+	}
+	return c.graphqlImpersonatorByVariant(variant)
+}
+
+// graphqlImpersonatorByVariant returns the global (proxy-wide) impersonator
+// for a variant, building it on first use.
+func (c *Client) graphqlImpersonatorByVariant(variant chromeVariant) *req.Client {
+	if c == nil {
+		return nil
+	}
+	if c.graphqlImpersonatorVariants == nil {
+		c.graphqlImpersonatorVariants = make(map[int]*req.Client, len(chromeVariants))
+	}
+	if client, ok := c.graphqlImpersonatorVariants[variant.Preset]; ok {
+		return client
+	}
+	client := newLeonardoVariantImpersonator(c.proxy, defaultClientTimeout, variant)
+	c.graphqlImpersonatorVariants[variant.Preset] = client
+	return client
+}
+
+// newLeonardoVariantImpersonator builds a Chrome-impersonating client whose
+// TLS ClientHello, UA and HTTP2 settings all match one real Chrome version.
+// ImpersonateChrome supplies the HTTP2 settings and pseudo-header order
+// (stable across 120-133); the ClientHello is overridden per variant.
+func newLeonardoVariantImpersonator(proxy string, timeout time.Duration, variant chromeVariant) *req.Client {
+	client := req.C().
+		SetTimeout(timeout).
+		SetDial(dialContextPreferIPv4).
+		ImpersonateChrome().
+		SetTLSFingerprint(variant.TLSClientHEL).
+		SetCommonHeader("user-agent", variant.UserAgent).
+		SetCookieJar(nil)
+	if strings.TrimSpace(proxy) != "" {
+		normalizedProxy, err := proxyfmt.NormalizeHTTPProxyURL(proxy)
+		if err == nil {
+			client.SetProxyURL(normalizedProxy)
+		} else {
+			client.SetProxyURL(strings.TrimSpace(proxy))
+		}
+	}
+	return client
 }
 
 // impersonatorFor picks the Chrome-impersonating refresh client honoring the
@@ -353,6 +442,8 @@ func NewClient(proxy string) *Client {
 		directHTTPClient:                directHTTPClient,
 		sessionImpersonatorClient:       newLeonardoSessionImpersonator(proxy, sessionRefreshTimeout),
 		directSessionImpersonatorClient: newLeonardoSessionImpersonator("", sessionRefreshTimeout),
+		graphqlImpersonatorVariants:     map[int]*req.Client{},
+		directGraphqlImpersonatorClient: newLeonardoSessionImpersonator("", defaultClientTimeout),
 		uploadInitHTTPClient:            uploadInitHTTPClient,
 		uploadHTTPClient:                uploadHTTPClient,
 		proxy:                           proxy,
@@ -1524,10 +1615,145 @@ func isAllowedSeedance480pSize(width int, height int) bool {
 	return (width == 496 && height == 864) || (width == 864 && height == 496) || (width == 640 && height == 640)
 }
 
+// chromeVariant is one self-consistent real-browser identity: TLS
+// ClientHello preset + matching UA + matching Sec-Ch-Ua headers. Mixing
+// versions across these layers is itself a detection signal.
+type chromeVariant struct {
+	Preset          int // index into chromeVariantPresets
+	TLSClientHEL    utls.ClientHelloID
+	Version         string
+	SecChUa         string
+	FullVersion     string
+	FullVersionList string
+	UserAgent       string
+}
+
+var chromeVariants = []chromeVariant{
+	{
+		// Current Chrome: since v133 the TLS ClientHello is byte-identical
+		// (utls stopped adding presets because nothing observable changed),
+		// so the 133 hello + current-version UA/Sec-Ch-Ua is exactly what a
+		// up-to-date Chrome sends.
+		TLSClientHEL: utls.HelloChrome_133, Version: "141",
+		SecChUa:         `"Chromium";v="141", "Not?A_Brand";v="24", "Google Chrome";v="141"`,
+		FullVersion:     `"141.0.0.0"`,
+		FullVersionList: `"Chromium";v="141", "Not?A_Brand";v="24", "Google Chrome";v="141"`,
+		UserAgent:       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+	},
+	{
+		TLSClientHEL: utls.HelloChrome_131, Version: "131",
+		SecChUa:         `"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"`,
+		FullVersion:     `"131.0.0.0"`,
+		FullVersionList: `"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"`,
+		UserAgent:       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+	},
+	{
+		TLSClientHEL: utls.HelloChrome_120, Version: "120",
+		SecChUa:         `"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"`,
+		FullVersion:     `"120.0.0.0"`,
+		FullVersionList: `"Not_A Brand";v="8.0.0.0", "Chromium";v="120.0.0.0", "Google Chrome";v="120.0.0.0"`,
+		UserAgent:       defaultUserAgent,
+	},
+}
+
+func chromeVariantByIndex(i int) chromeVariant {
+	if i < 0 || i >= len(chromeVariants) {
+		i = 0
+	}
+	return chromeVariants[i]
+}
+
+// sessionFingerprintVariant picks a stable browser variant for a session:
+// deterministic per account (one account = one consistent browser), diverse
+// across the pool. Real users keep one browser; populations vary.
+func sessionFingerprintVariant(session *TokenSession) chromeVariant {
+	key := session.FingerprintKey()
+	if key == "" {
+		return chromeVariantByIndex(0)
+	}
+	sum := sha256.Sum256([]byte("leo2api-fpv1:" + key))
+	return chromeVariantByIndex(int(sum[0]) % len(chromeVariants))
+}
+
+// graphqlChromeProfile returns realistic per-request header variation for a
+// given browser variant (real browsers legitimately differ in cache headers
+// and priority hints between requests).
+func graphqlChromeProfile(variant chromeVariant) []map[string]string {
+	secCh := map[string]string{
+		"Sec-Ch-Ua":                   variant.SecChUa,
+		"Sec-Ch-Ua-Full-Version":      variant.FullVersion,
+		"Sec-Ch-Ua-Full-Version-List": variant.FullVersionList,
+		"Sec-Fetch-Dest":              "empty",
+		"Sec-Fetch-Mode":              "cors",
+		"Sec-Fetch-Site":              "same-site",
+	}
+	return []map[string]string{
+		mergeProfile(map[string]string{
+			"Accept":          "*/*",
+			"Accept-Language": "en-US,en;q=0.9",
+			"Priority":        "u=1, i",
+		}, secCh),
+		mergeProfile(map[string]string{
+			"Accept":          "application/json, text/plain, */*",
+			"Accept-Language": "en-US,en;q=0.9",
+			"Cache-Control":   "no-cache",
+			"Pragma":          "no-cache",
+		}, secCh),
+	}
+}
+
+func mergeProfile(base map[string]string, extra map[string]string) map[string]string {
+	out := make(map[string]string, len(base)+len(extra))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range extra {
+		out[k] = v
+	}
+	return out
+}
+
+// doGraphQLWithReqClient sends a GraphQL request through the Chrome-
+// impersonating client with full browser headers.
+func doGraphQLWithReqClient(client *req.Client, variant chromeVariant, jwt string, gqlReq graphqlRequest) ([]byte, error) {
+	reqBody, err := json.Marshal(gqlReq)
+	if err != nil {
+		return nil, err
+	}
+	r := client.R().
+		SetHeader("Content-Type", "application/json").
+		SetHeader("Authorization", "Bearer "+jwt).
+		SetHeader("Origin", "https://app.leonardo.ai").
+		SetHeader("Referer", "https://app.leonardo.ai/").
+		SetHeader("User-Agent", variant.UserAgent).
+		SetHeader("X-Leo-Schema-Version", "latest").
+		SetBody(reqBody)
+	profiles := graphqlChromeProfile(variant)
+	profile := profiles[int(time.Now().UnixNano())%len(profiles)]
+	for k, v := range profile {
+		r.SetHeader(k, v)
+	}
+	resp, err := r.Post(GraphQLURL)
+	if err != nil {
+		return nil, fmt.Errorf("graphql request failed: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		body := resp.Bytes()
+		return nil, fmt.Errorf("graphql returned %d: %s", resp.StatusCode, string(body[:min(len(body), 500)]))
+	}
+	return resp.Bytes(), nil
+}
+
 // doGraphQL sends a GraphQL request and returns the raw response body.
 // A non-nil session routes the request through that account's sticky proxy.
+// Requests go out with full Chrome TLS+header impersonation.
 func (c *Client) doGraphQL(session *TokenSession, jwt string, gqlReq graphqlRequest) ([]byte, error) {
-	client := c.graphQLClientFor(session)
+	// An injected non-default transport (tests) keeps the plain-client path,
+	// mirroring the doSessionRefreshAttempt impersonation gate.
+	if c != nil && c.httpClient != c.defaultHTTPClient {
+		return c.doGraphQLWithClient(c.graphQLClientFor(session), jwt, gqlReq)
+	}
+	impersonator := c.graphqlImpersonatorFor(session)
 	usingProxy := c != nil && strings.TrimSpace(c.proxy) != ""
 	if session != nil && c.sessionHasProxy(session) {
 		usingProxy = true
@@ -1537,16 +1763,18 @@ func (c *Client) doGraphQL(session *TokenSession, jwt string, gqlReq graphqlRequ
 	var body []byte
 	var err error
 	for attempt := 1; ; attempt++ {
-		body, err = c.doGraphQLWithClient(client, jwt, gqlReq)
+		body, err = doGraphQLWithReqClient(impersonator, sessionFingerprintVariant(session), jwt, gqlReq)
 		if err == nil || attempt >= 3 || !isTransportInterruptError(err) {
 			break
 		}
 		log.Printf("[Leonardo] GraphQL transport interrupted (attempt %d/3), retrying in place: %v", attempt, err)
 		time.Sleep(time.Duration(attempt) * 200 * time.Millisecond)
 	}
-	if err != nil && c != nil && c.directHTTPClient != nil && usingProxy && (isProxyConnectionError(err) || isProxyRateLimitedError(err)) {
+	if err != nil && c != nil && usingProxy && (isProxyConnectionError(err) || isProxyRateLimitedError(err)) {
+		variant := sessionFingerprintVariant(session)
 		log.Printf("[Leonardo] GraphQL proxy path failed (connection/rate-limit), retrying direct: %v", err)
-		return c.doGraphQLWithClient(c.directHTTPClient, jwt, gqlReq)
+		direct := newLeonardoVariantImpersonator("", defaultClientTimeout, variant)
+		return doGraphQLWithReqClient(direct, variant, jwt, gqlReq)
 	}
 	return body, err
 }
@@ -3151,6 +3379,12 @@ func (c *Client) UploadImageToS3(session *TokenSession, uploadURL string, fields
 		}
 		req.Close = true
 		req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
+		// Browser-consistent headers: S3 access logs record the UA, and a
+		// flood of Go-http-client uploads against Leonardo presigned URLs is
+		// an obvious bot signal.
+		req.Header.Set("User-Agent", sessionFingerprintVariant(session).UserAgent)
+		req.Header.Set("Origin", "https://app.leonardo.ai")
+		req.Header.Set("Referer", "https://app.leonardo.ai/")
 
 		client := c.uploadClientFor(session)
 		resp, err := client.Do(req)
