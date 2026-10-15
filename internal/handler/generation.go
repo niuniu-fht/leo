@@ -556,6 +556,11 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 	for idx, refURL := range refURLs {
 		imageID, err := s.resolveLeonardoImageID(session, "", refURL, uploadCache)
 		if err != nil {
+			if isRequestDeniedError(err) {
+				// Risk-engine soft block on the request (often a flagged proxy
+				// exit): count it; enough of these auto-rotate the proxy sid.
+				s.recordRequestDeniedAndMaybeRotate()
+			}
 			if isAccountBannedError(err) {
 				// "You are suspended for violating our user agreement" — the
 				// account is banned upstream. Mark it abnormal and answer 502
@@ -632,6 +637,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 	}
 	s.applyTokenCreditCost(usedTokenID, result.APICreditCost)
 	s.resetTokenConcurrentLimitHits(usedTokenID)
+	s.resetRequestDeniedHits()
 	accountName, accountEmail := s.resolveReqLogAccount(usedTokenID, session)
 	if s.ReqLog != nil {
 		s.ReqLog.Add(reqlog.Entry{
