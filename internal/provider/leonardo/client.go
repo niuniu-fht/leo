@@ -1698,12 +1698,12 @@ func graphqlChromeProfile(variant chromeVariant) []map[string]string {
 	return []map[string]string{
 		mergeProfile(map[string]string{
 			"Accept":          "*/*",
-			"Accept-Language": "en-US,en;q=0.9",
+			"Accept-Language": "zh-CN,zh;q=0.9",
 			"Priority":        "u=1, i",
 		}, secCh),
 		mergeProfile(map[string]string{
 			"Accept":          "application/json, text/plain, */*",
-			"Accept-Language": "en-US,en;q=0.9",
+			"Accept-Language": "zh-CN,zh;q=0.9",
 			"Cache-Control":   "no-cache",
 			"Pragma":          "no-cache",
 		}, secCh),
