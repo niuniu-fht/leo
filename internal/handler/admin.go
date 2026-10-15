@@ -4949,6 +4949,13 @@ func (s *Server) getLeonardoSessionForModel(tokenID string, modelID string, imag
 			return nil, ""
 		}
 		if err := s.ensureGenerationJWTUsable(tokenID, session); err != nil {
+			// A challenge/429 storm on get-session is the other exit-quality
+			// failure mode (a sticky session parked on a challenged IP):
+			// feed the same window that drives proxy sid rotation.
+			msg := strings.ToLower(err.Error())
+			if strings.Contains(msg, "429") || strings.Contains(msg, "challenge") {
+				s.recordRequestDeniedAndMaybeRotate()
+			}
 			return nil, ""
 		}
 		return session, tokenID

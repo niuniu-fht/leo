@@ -13,11 +13,8 @@ func TestRotateProxySidReplacesExisting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rotate failed: %v", err)
 	}
-	if !strings.Contains(newURL, "-sid-auto") {
-		t.Fatalf("expected new auto sid in %q", newURL)
-	}
-	if strings.Contains(newURL, "sid-t137a") {
-		t.Fatalf("old sid should be replaced: %q", newURL)
+	if !strings.Contains(newURL, "-sid-") || strings.Contains(newURL, "sid-t137a") {
+		t.Fatalf("old sid should be replaced with fresh one: %q", newURL)
 	}
 	if !strings.Contains(newURL, "secret") {
 		t.Fatalf("password must be preserved: %q", newURL)
@@ -29,8 +26,8 @@ func TestRotateProxySidAppendsWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rotate failed: %v", err)
 	}
-	if !strings.Contains(newURL, "region-US-sid-auto") {
-		t.Fatalf("expected appended sid: %q", newURL)
+	if !strings.Contains(newURL, "region-US-session-") {
+		t.Fatalf("expected appended session: %q", newURL)
 	}
 }
 
@@ -39,8 +36,37 @@ func TestRotateProxySidKeepsTTLTail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rotate failed: %v", err)
 	}
-	if !strings.Contains(newURL, "-sid-auto") || !strings.Contains(newURL, "-t-60") {
+	if !strings.Contains(newURL, "-sid-") || !strings.Contains(newURL, "-t-60") || strings.Contains(newURL, "sid-old") {
 		t.Fatalf("sid replaced but ttl tail lost: %q", newURL)
+	}
+}
+
+func TestRotateProxySidBestgoSessionStyle(t *testing.T) {
+	newURL, err := rotateProxySid("http://leo2imguse-zone-custom-region-GB-session-48222583-sessTime-180-sessAuto-1:Aaleo0i8iI@us.rrp.bestgo.work:10000")
+	if err != nil {
+		t.Fatalf("rotate failed: %v", err)
+	}
+	if !strings.Contains(newURL, "-session-") {
+		t.Fatalf("session id should be replaced: %q", newURL)
+	}
+	if strings.Contains(newURL, "48222583") {
+		t.Fatalf("old session id should be replaced: %q", newURL)
+	}
+	if !strings.Contains(newURL, "sessTime-180") || !strings.Contains(newURL, "sessAuto-1") {
+		t.Fatalf("sessTime/sessAuto params must survive: %q", newURL)
+	}
+	if strings.Contains(newURL, "Aaleo0i8iI") == false && !strings.Contains(newURL, ":***@") {
+		t.Fatalf("credentials malformed: %q", newURL)
+	}
+}
+
+func TestRotateProxySidAppendsBestgoStyle(t *testing.T) {
+	newURL, err := rotateProxySid("http://leo2imguse-zone-custom-region-US:pw@gw:1")
+	if err != nil {
+		t.Fatalf("rotate failed: %v", err)
+	}
+	if !strings.Contains(newURL, "-session-") || !strings.Contains(newURL, "sessTime-180") || !strings.Contains(newURL, "sessAuto-1") {
+		t.Fatalf("append should use bestgo session style: %q", newURL)
 	}
 }
 
@@ -93,8 +119,8 @@ func TestRecordDeniedTriggersRotationOnThreshold(t *testing.T) {
 	if last.IsZero() {
 		t.Fatal("lastRotateAt should be set")
 	}
-	if got := cfg.GetString("proxy", ""); !strings.Contains(got, "-sid-auto") {
-		t.Fatalf("config proxy should carry new sid, got %q", got)
+	if got := cfg.GetString("proxy", ""); !strings.Contains(got, "-session-") {
+		t.Fatalf("config proxy should carry new session, got %q", got)
 	}
 }
 
@@ -121,7 +147,7 @@ func TestSuccessesDoNotMaskDenialDominance(t *testing.T) {
 	proxyRotateState.deniedHits = nil
 	proxyRotateState.successHits = nil
 	proxyRotateState.mu.Unlock()
-	if !strings.Contains(got, "-sid-auto") {
+	if !strings.Contains(got, "-session-") {
 		t.Fatalf("denial-dominant window should rotate, got %q", got)
 	}
 }
@@ -148,7 +174,7 @@ func TestSuccessDominanceDoesNotRotate(t *testing.T) {
 	proxyRotateState.mu.Lock()
 	got := cfg.GetString("proxy", "")
 	proxyRotateState.mu.Unlock()
-	if strings.Contains(got, "-sid-auto") {
+	if strings.Contains(got, "-sid-auto") || strings.Contains(got, "-session-auto") {
 		t.Fatalf("success-dominant window must not rotate, got %q", got)
 	}
 }

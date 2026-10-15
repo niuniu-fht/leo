@@ -140,9 +140,13 @@ func proxyfmt_maskPassword(raw string) string {
 	return raw
 }
 
-// rotateProxySid replaces an existing "-sid-<x>" segment in the proxy
-// username, or appends one; usernames without the vendor "-region-" pattern
-// are refused (unknown providers may not support sid parameters).
+// rotateProxySid swaps the session id inside the proxy username for a fresh
+// one, preserving every other parameter. Two vendor styles are understood:
+//   - "...-sid-<id>[-t-<min>]"          (1024proxy style)
+//   - "...-session-<id>-sessTime-<m>[-sessAuto-1]" (bestgo style)
+//
+// Usernames without a "-region-" marker are refused (unknown providers may
+// not support session parameters at all).
 func rotateProxySid(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -160,20 +164,22 @@ func rotateProxySid(raw string) (string, error) {
 	if _, err := rand.Read(buf); err != nil {
 		return "", err
 	}
-	sid := "auto" + hex.EncodeToString(buf)
-	newUsername := username
-	if idx := strings.Index(username, "-sid-"); idx >= 0 {
-		head := username[:idx]
-		rest := username[idx+5:]
-		if tail := strings.Index(rest, "-"); tail >= 0 {
-			newUsername = head + "-sid-" + sid + rest[tail:]
-		} else {
-			newUsername = head + "-sid-" + sid
-		}
-	} else {
-		newUsername = username + "-sid-" + sid
-	}
+	newUsername := rotateSessionInUsername(username, hex.EncodeToString(buf))
 	password, _ := u.User.Password()
 	u.User = url.UserPassword(newUsername, password)
 	return u.String(), nil
+}
+
+// rotateSessionInUsername replaces the token following the session marker
+// ("sid" or "session"), keeping the remainder (sessTime/sessAuto/t params)
+// untouched. Appends in bestgo style when no marker exists yet.
+func rotateSessionInUsername(username string, newID string) string {
+	parts := strings.Split(username, "-")
+	for i, part := range parts {
+		if (part == "sid" || part == "session") && i+1 < len(parts) {
+			parts[i+1] = newID
+			return strings.Join(parts, "-")
+		}
+	}
+	return username + "-session-" + newID + "-sessTime-180-sessAuto-1"
 }
