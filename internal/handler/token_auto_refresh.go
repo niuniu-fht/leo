@@ -242,6 +242,12 @@ func (s *Server) refreshLeonardoTokenByIDWithOptions(tokenID string, allowExhaus
 
 	session, credits, err := s.validateLeonardoTokenForced(tokenID, rawToken)
 	if err != nil {
+		// Challenge/429 storms during background refresh feed the proxy
+		// sid-rotation window too (sticky session parked on a challenged IP).
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "429") || strings.Contains(msg, "challenge") {
+			s.recordRequestDeniedAndMaybeRotate()
+		}
 		result := s.recordLeonardoRefreshFailure(tokenID, err)
 		log.Printf("[token] auto-refresh failed for %s: %v", tokenID, err)
 		if result.finalStatus != "" {
