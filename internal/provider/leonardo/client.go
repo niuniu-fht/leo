@@ -3,6 +3,7 @@ package leonardo
 import (
 	"bytes"
 	"context"
+	crypto_rand "crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -1379,10 +1380,17 @@ func (c *Client) ValidateToken(fullCookie string) (*TokenSession, *Credits, erro
 // Video Generation via GraphQL
 // ──────────────────────────────────────────────────────────
 
+// Matches the official web app's Generate mutation byte-for-byte (query text
+// is visible server-side and acts as a client signature).
 const generateMutation = `mutation Generate($request: CreateGenerationRequest!) {
   generate(request: $request) {
     apiCreditCost
     generationId
+    cost {
+      amount
+      unit
+      __typename
+    }
     __typename
   }
 }`
@@ -1715,7 +1723,41 @@ func mergeProfile(base map[string]string, extra map[string]string) map[string]st
 
 // doGraphQLWithReqClient sends a GraphQL request through the Chrome-
 // impersonating client with full browser headers.
-func doGraphQLWithReqClient(client *req.Client, variant chromeVariant, jwt string, gqlReq graphqlRequest) ([]byte, error) {
+// leonardoSchemaVersion mirrors the version pinned by the current official
+// web app bundle ("latest" is never sent by the real frontend).
+const leonardoSchemaVersion = "1.352.1"
+
+const sentryRelease = "ace1a415c6e60074930aa2f8a2a224b38042b51c"
+
+// randomHex produces n random hex characters for sentry trace ids.
+func randomHex(n int) string {
+	const digits = "0123456789abcdef"
+	b := make([]byte, n)
+	_, _ = randSource.Read(b)
+	for i := range b {
+		b[i] = digits[int(b[i])%16]
+	}
+	return string(b)
+}
+
+var randSource = crypto_rand.Reader
+
+// sentryHeaders reproduces the telemetry headers the official frontend
+// attaches to every API call (per-request trace ids, sampled off — the site
+// samples at 0.0001).
+func sentryHeaders() (string, string) {
+	traceID := randomHex(32)
+	spanID := randomHex(16)
+	sampleRand := fmt.Sprintf("0.%08d", time.Now().UnixNano()%100000000)
+	trace := traceID + "-" + spanID + "-0"
+	baggage := "sentry-environment=vercel-production,sentry-release=" + sentryRelease +
+		",sentry-public_key=a851bd902378477eae99cf74c62e142a,sentry-org_id=4504767521292288" +
+		",sentry-transaction=%2F%3Alocale%2Fgenerate,sentry-sampled=false,sentry-sample_rand=" +
+		sampleRand + ",sentry-sample_rate=0.0001"
+	return trace, baggage
+}
+
+func doGraphQLWithReqClient(client *req.Client, variant chromeVariant, jwt string, cookie string, gqlReq graphqlRequest) ([]byte, error) {
 	reqBody, err := json.Marshal(gqlReq)
 	if err != nil {
 		return nil, err
@@ -1726,8 +1768,15 @@ func doGraphQLWithReqClient(client *req.Client, variant chromeVariant, jwt strin
 		SetHeader("Origin", "https://app.leonardo.ai").
 		SetHeader("Referer", "https://app.leonardo.ai/").
 		SetHeader("User-Agent", variant.UserAgent).
-		SetHeader("X-Leo-Schema-Version", "latest").
+		SetHeader("X-Leo-Schema-Version", leonardoSchemaVersion).
 		SetBody(reqBody)
+	if trace, baggage := sentryHeaders(); trace != "" {
+		r.SetHeader("Sentry-Trace", trace)
+		r.SetHeader("Baggage", baggage)
+	}
+	if cookie = strings.TrimSpace(cookie); cookie != "" {
+		r.SetHeader("Cookie", cookie)
+	}
 	profiles := graphqlChromeProfile(variant)
 	profile := profiles[int(time.Now().UnixNano())%len(profiles)]
 	for k, v := range profile {
@@ -1762,8 +1811,12 @@ func (c *Client) doGraphQL(session *TokenSession, jwt string, gqlReq graphqlRequ
 	// are retried in place on the same client, up to 3 total attempts.
 	var body []byte
 	var err error
+	var sessionCookie string
+	if session != nil {
+		sessionCookie = session.CookieSnapshot()
+	}
 	for attempt := 1; ; attempt++ {
-		body, err = doGraphQLWithReqClient(impersonator, sessionFingerprintVariant(session), jwt, gqlReq)
+		body, err = doGraphQLWithReqClient(impersonator, sessionFingerprintVariant(session), jwt, sessionCookie, gqlReq)
 		if err == nil || attempt >= 3 || !isTransportInterruptError(err) {
 			break
 		}
@@ -1774,7 +1827,7 @@ func (c *Client) doGraphQL(session *TokenSession, jwt string, gqlReq graphqlRequ
 		variant := sessionFingerprintVariant(session)
 		log.Printf("[Leonardo] GraphQL proxy path failed (connection/rate-limit), retrying direct: %v", err)
 		direct := newLeonardoVariantImpersonator("", defaultClientTimeout, variant)
-		return doGraphQLWithReqClient(direct, variant, jwt, gqlReq)
+		return doGraphQLWithReqClient(direct, variant, jwt, sessionCookie, gqlReq)
 	}
 	return body, err
 }
