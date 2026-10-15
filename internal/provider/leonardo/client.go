@@ -34,9 +34,12 @@ import (
 
 const (
 	SessionURL   = "https://app.leonardo.ai/api/auth/get-session"
-	GraphQLURL   = "https://api.leonardo.ai/v1/graphql"
 	JWTMarginSec = 300 // JWT 过期前 5 分钟就刷新
 )
+
+// GraphQLURL is a var so tests can point it at a local capture server and
+// diff outgoing requests against official browser captures.
+var GraphQLURL = "https://api.leonardo.ai/v1/graphql"
 
 const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
 	"(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -115,6 +118,33 @@ func (s *TokenSession) SetProxyOverride(proxyURL string) {
 	if old != nil {
 		old.closeIdle()
 	}
+}
+
+// SeedSessionFromJWT imports a bare Cognito JWT (three dot-separated base64
+// segments) into the session directly, skipping get-session. Returns true if
+// raw was a usable JWT with a future exp.
+func SeedSessionFromJWT(session *TokenSession, raw string) bool {
+	parts := strings.Split(strings.TrimSpace(raw), ".")
+	if len(parts) != 3 {
+		return false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return false
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.Exp <= 0 {
+		return false
+	}
+	expiry := time.Unix(claims.Exp, 0)
+	if !time.Now().Before(expiry) {
+		return false
+	}
+	session.JWT = raw
+	session.JWTExpiry = expiry
+	return true
 }
 
 // FingerprintKey returns a stable per-account identity used to pick a
@@ -1725,7 +1755,7 @@ func mergeProfile(base map[string]string, extra map[string]string) map[string]st
 // impersonating client with full browser headers.
 // leonardoSchemaVersion mirrors the version pinned by the current official
 // web app bundle ("latest" is never sent by the real frontend).
-const leonardoSchemaVersion = "1.352.1"
+const leonardoSchemaVersion = "1.352.2"
 
 const sentryRelease = "ace1a415c6e60074930aa2f8a2a224b38042b51c"
 

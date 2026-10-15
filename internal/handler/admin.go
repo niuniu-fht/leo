@@ -714,7 +714,9 @@ func (s *Server) getOrCreateLeonardoSession(tokenID, rawToken string) *leonardo.
 	}
 
 	session := &leonardo.TokenSession{FullCookie: rawToken, SourceCookie: rawToken}
-	s.bindLeonardoSessionCookiePersistence(tokenID, session)
+	if !leonardo.SeedSessionFromJWT(session, rawToken) {
+		s.bindLeonardoSessionCookiePersistence(tokenID, session)
+	}
 	applyProxyGen(session)
 	s.leoSessions[key] = session
 	return session
