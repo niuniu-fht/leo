@@ -42,6 +42,7 @@ func isRequestDeniedError(err error) bool {
 type proxyAutoRotate struct {
 	mu           sync.Mutex
 	deniedHits   []time.Time
+	successHits  []time.Time
 	lastRotateAt time.Time
 }
 
@@ -63,22 +64,39 @@ func (s *Server) recordRequestDeniedAndMaybeRotate() {
 		}
 	}
 	proxyRotateState.deniedHits = kept
+	keptOK := proxyRotateState.successHits[:0]
+	for _, t := range proxyRotateState.successHits {
+		if now.Sub(t) <= requestDeniedWindow {
+			keptOK = append(keptOK, t)
+		}
+	}
+	proxyRotateState.successHits = keptOK
+	// Denials must outnumber successes: on a healthy exit, production
+	// successes would otherwise mask a deteriorating exit forever, while on
+	// a flagged exit denials dominate regardless of a few stray successes.
 	if len(kept) < requestDeniedThreshold ||
+		len(kept) <= len(keptOK) ||
 		now.Sub(proxyRotateState.lastRotateAt) < proxyRotateCooldown {
 		proxyRotateState.mu.Unlock()
 		return
 	}
 	proxyRotateState.lastRotateAt = now
 	proxyRotateState.deniedHits = nil
+	proxyRotateState.successHits = nil
 	proxyRotateState.mu.Unlock()
 
 	s.rotateBasicProxySid(now)
 }
 
-// resetRequestDeniedHits clears the window after any successful submission.
-func (s *Server) resetRequestDeniedHits() {
+// recordRequestSuccess registers a successful submission in the window.
+// Successes are not a reset: they are compared against denials so production
+// traffic cannot mask a flagged exit (denials must dominate to rotate).
+func (s *Server) recordRequestSuccess() {
+	if s == nil {
+		return
+	}
 	proxyRotateState.mu.Lock()
-	proxyRotateState.deniedHits = nil
+	proxyRotateState.successHits = append(proxyRotateState.successHits, time.Now())
 	proxyRotateState.mu.Unlock()
 }
 

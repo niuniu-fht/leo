@@ -637,7 +637,7 @@ func (s *Server) handleOpenAIImageRequest(w http.ResponseWriter, r *http.Request
 	}
 	s.applyTokenCreditCost(usedTokenID, result.APICreditCost)
 	s.resetTokenConcurrentLimitHits(usedTokenID)
-	s.resetRequestDeniedHits()
+	s.recordRequestSuccess()
 	accountName, accountEmail := s.resolveReqLogAccount(usedTokenID, session)
 	if s.ReqLog != nil {
 		s.ReqLog.Add(reqlog.Entry{

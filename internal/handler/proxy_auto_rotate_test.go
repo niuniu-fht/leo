@@ -62,9 +62,9 @@ func TestIsRequestDeniedErrorClassification(t *testing.T) {
 	if isRequestDeniedError(&upstreamDetailErrStub{msg: blocked}) {
 		t.Fatal("User is blocked must NOT match (it is an account ban)")
 	}
-	// deny window reset helper must be nil-safe
+	// success recorder must be nil-safe
 	s := &Server{Config: config.New()}
-	s.resetRequestDeniedHits()
+	s.recordRequestSuccess()
 }
 
 func TestRecordDeniedTriggersRotationOnThreshold(t *testing.T) {
@@ -75,6 +75,7 @@ func TestRecordDeniedTriggersRotationOnThreshold(t *testing.T) {
 
 	proxyRotateState.mu.Lock()
 	proxyRotateState.deniedHits = nil
+	proxyRotateState.successHits = nil
 	proxyRotateState.lastRotateAt = time.Time{}
 	proxyRotateState.mu.Unlock()
 
@@ -94,5 +95,60 @@ func TestRecordDeniedTriggersRotationOnThreshold(t *testing.T) {
 	}
 	if got := cfg.GetString("proxy", ""); !strings.Contains(got, "-sid-auto") {
 		t.Fatalf("config proxy should carry new sid, got %q", got)
+	}
+}
+
+func TestSuccessesDoNotMaskDenialDominance(t *testing.T) {
+	cfg := config.New()
+	cfg.Set("use_proxy", true)
+	cfg.Set("proxy", "http://u-region-us:pw@gw.test:1000")
+	s := &Server{Config: cfg}
+	proxyRotateState.mu.Lock()
+	proxyRotateState.deniedHits = nil
+	proxyRotateState.successHits = nil
+	proxyRotateState.lastRotateAt = time.Time{}
+	proxyRotateState.mu.Unlock()
+
+	// 5 successes interleaved with 6 denials: denials dominate -> rotate.
+	for i := 0; i < 5; i++ {
+		s.recordRequestSuccess()
+		s.recordRequestDeniedAndMaybeRotate()
+	}
+	s.recordRequestDeniedAndMaybeRotate()
+
+	proxyRotateState.mu.Lock()
+	got := cfg.GetString("proxy", "")
+	proxyRotateState.deniedHits = nil
+	proxyRotateState.successHits = nil
+	proxyRotateState.mu.Unlock()
+	if !strings.Contains(got, "-sid-auto") {
+		t.Fatalf("denial-dominant window should rotate, got %q", got)
+	}
+}
+
+func TestSuccessDominanceDoesNotRotate(t *testing.T) {
+	cfg := config.New()
+	cfg.Set("use_proxy", true)
+	cfg.Set("proxy", "http://u-region-us:pw@gw.test:1000")
+	s := &Server{Config: cfg}
+	proxyRotateState.mu.Lock()
+	proxyRotateState.deniedHits = nil
+	proxyRotateState.successHits = nil
+	proxyRotateState.lastRotateAt = time.Now().Add(-proxyRotateCooldown) // allow rotation
+	proxyRotateState.mu.Unlock()
+
+	// 8 successes vs 3 denials: healthy exit with a doomed account or two —
+	// rotating would be wrong.
+	for i := 0; i < 8; i++ {
+		s.recordRequestSuccess()
+	}
+	for i := 0; i < 3; i++ {
+		s.recordRequestDeniedAndMaybeRotate()
+	}
+	proxyRotateState.mu.Lock()
+	got := cfg.GetString("proxy", "")
+	proxyRotateState.mu.Unlock()
+	if strings.Contains(got, "-sid-auto") {
+		t.Fatalf("success-dominant window must not rotate, got %q", got)
 	}
 }
